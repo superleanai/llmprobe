@@ -1952,7 +1952,7 @@ def agentknit_default_tools_test_round(client: openai.OpenAI) -> dict:
         "read_file":   f"Please read the file {read_path} and tell me its contents.",
         "write_file":  f"Please write 'hello world\\n' to the file {write_path}.",
         "str_replace": f"In the file {update_path}, replace the exact string 'x = 1' "
-                        "with 'x = 42'. Do not rewrite the whole file.",
+                        "with 'x = 42'.",
         "exec_shell":  f"Please run `ls -la {tmpdir}` and show me the output.",
     }
 
