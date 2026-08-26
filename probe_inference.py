@@ -117,6 +117,15 @@ def parse_args() -> argparse.Namespace:
                         "reasoning-effort syntax (native reasoning_effort param, or "
                         "extra_body={'reasoning': {'effort': ...}}) without erroring. "
                         "On by default; pass --no-reasoning-test to skip.")
+    p.add_argument("--agentknit-test", action=argparse.BooleanOptionalAction,
+                   dest="agentknit_test", default=True,
+                   help="Run an extra round that offers agentknit's actual shipped "
+                        "default tool schema (read_file/write_file/str_replace/"
+                        "exec_shell, imported live from agentknit._core) and dispatches "
+                        "each call through agentknit's real dispatch() against a scratch "
+                        "directory, verifying both tool selection and the on-disk effect. "
+                        "Requires agentknit to be importable. On by default; pass "
+                        "--no-agentknit-test to skip.")
     p.add_argument("--api-type", default="openai-completions",
                    choices=["openai-completions", "openai-responses", "anthropic-messages"],
                    help="The *actual* backend transport behind the endpoint/script, for "
@@ -233,7 +242,7 @@ _RESULT_KEYS = (
     "behaviour", "tool_dispatch", "dispatch_conflicts",
     "quote_test", "token_efficiency_test", "askq_test",
     "gram_knowledge_test", "gram_transport_test", "rjson_test",
-    "stream_test", "reasoning_test",
+    "stream_test", "reasoning_test", "agentknit_test",
 )
 
 
@@ -1894,6 +1903,111 @@ def reasoning_test_round(client: openai.OpenAI) -> dict:
     return {"reason_results": results, "reason_passed": passed, "reason_total": total}
 
 
+# -- agentknit default-tool compatibility test (AKDEF) -------------------------
+#
+# Unlike TSEL (which scores selection among the model's own elicited tool
+# names), AKDEF exercises agentknit's actual shipped default tool schema --
+# imported live from agentknit._core, not reconstructed here -- end to end:
+# each task's call is run through agentknit's real dispatch() against a
+# scratch directory, so PASS means the model's call would actually work
+# inside agentknit today. This doubles as a new-model compatibility check
+# and a regression test to rerun after fine-tuning a model against
+# agentknit's tool contract.
+
+def _akdef_verify_effect(tool_name: str, result_str: str,
+                          write_path: str, update_path: str) -> bool:
+    """Check the observable effect of a dispatched AKDEF call."""
+    if tool_name == "read_file":
+        return "hello agentknit" in result_str
+    if tool_name == "write_file":
+        return os.path.exists(write_path) and Path(write_path).read_text() == "hello world\n"
+    if tool_name == "str_replace":
+        return os.path.exists(update_path) and "x = 42" in Path(update_path).read_text()
+    if tool_name == "exec_shell":
+        try:
+            return json.loads(result_str).get("returncode") == 0
+        except (json.JSONDecodeError, AttributeError):
+            return False
+    return False
+
+
+def agentknit_default_tools_test_round(client: openai.OpenAI) -> dict:
+    section("AKDEF -- agentknit default-tool compatibility")
+    try:
+        from agentknit._core import _DEFAULT_TOOL_DISPATCH, _DEFAULT_TOOL_SCHEMA, dispatch
+    except ImportError as e:
+        print(f"\nERROR: agentknit not importable: {e}")
+        return {"error": f"agentknit not importable: {e}"}
+
+    import shutil
+    import tempfile
+    tmpdir = tempfile.mkdtemp(prefix="llmprobe_akdef_")
+    read_path   = os.path.join(tmpdir, "hello.txt")
+    write_path  = os.path.join(tmpdir, "write_target.txt")
+    update_path = os.path.join(tmpdir, "update_target.py")
+    Path(read_path).write_text("hello agentknit\n")
+    Path(update_path).write_text("x = 1\n")
+
+    tasks = {
+        "read_file":   f"Please read the file {read_path} and tell me its contents.",
+        "write_file":  f"Please write 'hello world\\n' to the file {write_path}.",
+        "str_replace": f"In the file {update_path}, replace the exact string 'x = 1' "
+                        "with 'x = 42'. Do not rewrite the whole file.",
+        "exec_shell":  f"Please run `ls -la {tmpdir}` and show me the output.",
+    }
+
+    results: dict[str, dict] = {}
+    try:
+        for tool_name, task in tasks.items():
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant with tool access."},
+                {"role": "user",   "content": task},
+            ]
+            resp = chat(client, messages, tools=_DEFAULT_TOOL_SCHEMA)
+            _save_probe(f"akdef_{tool_name}", messages, resp, tools=_DEFAULT_TOOL_SCHEMA)
+            call = extract_call_from_response(resp)
+            entry: dict = {
+                "expected_tool":  tool_name,
+                "called_tool":    call.function_name if call else None,
+                "arguments":      call.arguments if call else None,
+                "tool_selected":  bool(call and call.function_name == tool_name),
+                "dispatch_ok":    False,
+                "effect_verified": False,
+                "error": None,
+            }
+            if not call:
+                entry["error"] = "no tool call detected"
+            elif not entry["tool_selected"]:
+                entry["error"] = f"called {call.function_name!r} instead of {tool_name!r}"
+            else:
+                try:
+                    result_str, _ = dispatch(tool_name, call.arguments, _DEFAULT_TOOL_DISPATCH)
+                except Exception as e:
+                    entry["error"] = f"dispatch raised: {e}"
+                    result_str = None
+                if result_str is not None:
+                    entry["dispatch_result"] = result_str[:500]
+                    if result_str.startswith("ERROR"):
+                        entry["error"] = result_str
+                    else:
+                        entry["dispatch_ok"] = True
+                        entry["effect_verified"] = _akdef_verify_effect(
+                            tool_name, result_str, write_path, update_path)
+                        if not entry["effect_verified"]:
+                            entry["error"] = "dispatch succeeded but the on-disk effect was wrong"
+            entry["pass"] = entry["dispatch_ok"] and entry["effect_verified"]
+            print(f"[{tool_name}] {'PASS' if entry['pass'] else 'FAIL'} -- "
+                  f"called={entry['called_tool']!r} {entry['error'] or ''}")
+            results[tool_name] = entry
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    passed = sum(1 for r in results.values() if r["pass"])
+    total  = len(results)
+    print(f"\nAKDEF summary: {passed}/{total} passed")
+    return {"akdef_results": results, "akdef_passed": passed, "akdef_total": total}
+
+
 # -- markdown report -----------------------------------------------------------
 
 def _md_escape(text: str) -> str:
@@ -1932,6 +2046,7 @@ def render_markdown_report(output: dict) -> str:
     rjson_test = output.get("rjson_test")
     stream_test = output.get("stream_test")
     reasoning_test = output.get("reasoning_test")
+    agentknit_test = output.get("agentknit_test")
 
     lines.append("## Capabilities summary")
     lines.append("")
@@ -1979,6 +2094,12 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"| `REASN` | {reasoning_test.get('reason_passed', 0)}/{reasoning_test.get('reason_total', 0)} |")
     else:
         lines.append("| `REASN` | *(not run — rerun without `--no-reasoning-test`)* |")
+    if agentknit_test and "error" not in agentknit_test:
+        lines.append(f"| `AKDEF` | {agentknit_test.get('akdef_passed', 0)}/{agentknit_test.get('akdef_total', 0)} |")
+    elif agentknit_test and agentknit_test.get("error"):
+        lines.append(f"| `AKDEF` | *(error: {_md_escape(agentknit_test['error'])})* |")
+    else:
+        lines.append("| `AKDEF` | *(not run — rerun without `--no-agentknit-test`)* |")
     tsel_test = output.get("tsel_test")
     if tsel_test and "error" not in tsel_test:
         tsel_passed = tsel_test.get("tsel_passed", 0)
@@ -2066,6 +2187,34 @@ def render_markdown_report(output: dict) -> str:
             called = result.get("function_name") or "*(none)*"
             note = _md_escape(result.get("error") or "")
             lines.append(f"| {op} | {status} | `{expected}` | `{called}` | {note} |")
+        lines.append("")
+
+    if agentknit_test and "error" not in agentknit_test:
+        results = agentknit_test.get("akdef_results") or {}
+        passed  = agentknit_test.get("akdef_passed", 0)
+        total   = agentknit_test.get("akdef_total", 0)
+        lines.append("## Agentknit default-tool compatibility test (`AKDEF`)")
+        lines.append("")
+        lines.append(f"**{passed}/{total} passed** — agentknit's real shipped default tool "
+                     "schema (`read_file`/`write_file`/`str_replace`/`exec_shell`, imported "
+                     "live from `agentknit._core`) is offered, and each call is dispatched "
+                     "through agentknit's real `dispatch()` against a scratch directory. "
+                     "PASS requires both the right tool selected and the correct on-disk "
+                     "effect.")
+        lines.append("")
+        lines.append("| Tool | Result | Called tool | Dispatch OK | Effect verified | Notes |")
+        lines.append("|---|---|---|---|---|---|")
+        for op, r in results.items():
+            status = "PASS" if r.get("pass") else "FAIL"
+            called = r.get("called_tool") or "*(none)*"
+            note   = _md_escape(r.get("error") or "")
+            lines.append(f"| {op} | {status} | `{called}` | "
+                         f"{r.get('dispatch_ok')} | {r.get('effect_verified')} | {note} |")
+        lines.append("")
+    elif agentknit_test and agentknit_test.get("error"):
+        lines.append("## Agentknit default-tool compatibility test (`AKDEF`)")
+        lines.append("")
+        lines.append(f"Error: {agentknit_test['error']}")
         lines.append("")
 
     dispatch = output.get("tool_dispatch") or {}
@@ -2428,6 +2577,16 @@ def _find_missing_capabilities(output: dict) -> list[str]:
             if not r.get("pass"):
                 problems.append(f"`REASN_{op}` FAILED — {r.get('error', 'unknown reason')}")
 
+    agentknit_test = output.get("agentknit_test")
+    if agentknit_test is None:
+        problems.append("`AKDEF` capability not tested (rerun without --no-agentknit-test).")
+    elif agentknit_test.get("error"):
+        problems.append(f"`AKDEF` test failed to run: {agentknit_test['error']}")
+    else:
+        for op, r in (agentknit_test.get("akdef_results") or {}).items():
+            if not r.get("pass"):
+                problems.append(f"`AKDEF_{op}` FAILED — {r.get('error', 'unknown reason')}")
+
     return problems
 
 
@@ -2487,6 +2646,7 @@ def main():
         "rjson_test":           None,
         "stream_test":          None,
         "reasoning_test":       None,
+        "agentknit_test":       None,
     }
 
     md_path = _capabilities_md_path(out_path)
@@ -2679,6 +2839,18 @@ def main():
             else:
                 output["reasoning_test"] = {"error": str(e)}
                 print(f"\nERROR in REASN test round: {e}")
+
+    if args.agentknit_test:
+        try:
+            akt = agentknit_default_tools_test_round(client)
+            output["agentknit_test"] = akt
+        except Exception as e:
+            if _keep_previous_result(e, previous, "agentknit_test"):
+                output["agentknit_test"] = previous["agentknit_test"]
+                print(f"\nERROR in AKDEF test round (429): {e} -- keeping previous run's result")
+            else:
+                output["agentknit_test"] = {"error": str(e)}
+                print(f"\nERROR in AKDEF test round: {e}")
 
     save()
 

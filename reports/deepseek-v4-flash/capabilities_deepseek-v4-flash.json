@@ -7,17 +7,17 @@
   "format_detection": {
     "detected_format": "structured_tool_calls",
     "has_structured_tool_calls": true,
-    "raw_content_snippet": "I'll read the file for you."
+    "raw_content_snippet": null
   },
   "elicited_names": {
     "read_file": "read_file",
     "write_file": "write_file",
-    "update_file": "replace_in_file",
-    "execute_bash": "run_shell_command",
+    "update_file": "edit_file",
+    "execute_bash": "shell_exec",
     "ask_user_question": "ask_user_question",
     "list_directory": "list_directory",
     "search_files": "grep",
-    "glob": "glob.glob"
+    "glob": "find_files"
   },
   "inferred_tool_schema": [
     {
@@ -66,7 +66,7 @@
     {
       "type": "function",
       "function": {
-        "name": "replace_in_file",
+        "name": "edit_file",
         "description": "Perform the 'update_file' operation.",
         "parameters": {
           "type": "object",
@@ -95,7 +95,7 @@
     {
       "type": "function",
       "function": {
-        "name": "run_shell_command",
+        "name": "shell_exec",
         "description": "Perform the 'execute_bash' operation.",
         "parameters": {
           "type": "object",
@@ -181,14 +181,18 @@
     {
       "type": "function",
       "function": {
-        "name": "glob_glob",
+        "name": "find_files",
         "description": "Perform the 'glob' operation.",
         "parameters": {
           "type": "object",
           "properties": {
-            "pathname": {
+            "path": {
               "type": "string",
-              "description": "pathname"
+              "description": "path"
+            },
+            "pattern": {
+              "type": "string",
+              "description": "pattern"
             },
             "recursive": {
               "type": "boolean",
@@ -196,7 +200,8 @@
             }
           },
           "required": [
-            "pathname",
+            "path",
+            "pattern",
             "recursive"
           ]
         }
@@ -224,7 +229,7 @@
         "content": "content"
       }
     },
-    "run_shell_command": {
+    "shell_exec": {
       "python_function": "t_run",
       "param_map": {
         "command": "command"
@@ -249,15 +254,67 @@
         "path": "path"
       }
     },
-    "glob_glob": {
-      "python_function": "t_read",
-      "param_map": {
-        "pathname": "path"
-      }
+    "find_files": {
+      "python_function": "t_glob",
+      "param_map": {}
     }
   },
   "dispatch_conflicts": {
     "update_file": "read_file"
+  },
+  "tsel_test": {
+    "tsel_results": {
+      "read_file": {
+        "pass": true,
+        "expected_function_name": "read_file",
+        "function_name": "read_file",
+        "error": null
+      },
+      "write_file": {
+        "pass": true,
+        "expected_function_name": "write_file",
+        "function_name": "write_file",
+        "error": null
+      },
+      "update_file": {
+        "pass": false,
+        "expected_function_name": "edit_file",
+        "function_name": "read_file",
+        "error": "called 'read_file' instead of 'edit_file'"
+      },
+      "execute_bash": {
+        "pass": true,
+        "expected_function_name": "shell_exec",
+        "function_name": "shell_exec",
+        "error": null
+      },
+      "ask_user_question": {
+        "pass": true,
+        "expected_function_name": "ask_user_question",
+        "function_name": "ask_user_question",
+        "error": null
+      },
+      "list_directory": {
+        "pass": true,
+        "expected_function_name": "list_directory",
+        "function_name": "list_directory",
+        "error": null
+      },
+      "search_files": {
+        "pass": true,
+        "expected_function_name": "grep",
+        "function_name": "grep",
+        "error": null
+      },
+      "glob": {
+        "pass": true,
+        "expected_function_name": "find_files",
+        "function_name": "find_files",
+        "error": null
+      }
+    },
+    "tsel_passed": 7,
+    "tsel_total": 8
   },
   "quote_test": {
     "quote_test_results": {
@@ -282,7 +339,7 @@
           "command": "echo \"hello \\\"world\\\"\""
         },
         "isolated": true,
-        "function_name": "run_shell_command"
+        "function_name": "shell_exec"
       },
       "update_file": {
         "task": "In /tmp/test.py, replace the string x = \"old value\" with x = \"new value\". Do not rewrite the whole file.",
@@ -295,7 +352,7 @@
           "new_string": "x = \"new value\""
         },
         "isolated": true,
-        "function_name": "replace_in_file"
+        "function_name": "edit_file"
       }
     },
     "quote_test_passed": 3,
@@ -307,7 +364,7 @@
         "task": "The file /var/log/app.log is 500,000 lines long. Find all lines containing the exact string 'FATAL ERROR' and show them to me.",
         "pass": true,
         "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
-        "function_name": "run_shell_command",
+        "function_name": "shell_exec",
         "python_function": "t_run",
         "parsed_args": {
           "command": "grep -n 'FATAL ERROR' /var/log/app.log"
@@ -317,17 +374,17 @@
         "task": "The file /var/data/access.log has several million lines. Tell me how many lines contain the IP address 203.0.113.42. I only need the count.",
         "pass": true,
         "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
-        "function_name": "run_shell_command",
+        "function_name": "shell_exec",
         "python_function": "t_run",
         "parsed_args": {
-          "command": "grep -c \"203\\.0\\.113\\.42\" /var/data/access.log"
+          "command": "grep -c \"203.0.113.42\" /var/data/access.log"
         }
       },
       "specific_line": {
         "task": "The file /opt/build/output.txt is over a million lines long. What is on line 48213 of that file?",
         "pass": true,
         "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
-        "function_name": "run_shell_command",
+        "function_name": "shell_exec",
         "python_function": "t_run",
         "parsed_args": {
           "command": "sed -n '48213p' /opt/build/output.txt"
@@ -336,13 +393,11 @@
       "check_string_exists": {
         "task": "The file /var/log/build.log is huge (hundreds of thousands of lines). Does the word 'DeprecationWarning' appear anywhere in it? Just answer yes or no.",
         "pass": true,
-        "reason": "dedicated search tool used -- inherently filtered",
-        "function_name": "grep",
-        "python_function": "t_search",
+        "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
+        "function_name": "shell_exec",
+        "python_function": "t_run",
         "parsed_args": {
-          "pattern": "DeprecationWarning",
-          "path": "/var/log/build.log",
-          "recursive": false
+          "command": "grep -c \"DeprecationWarning\" /var/log/build.log"
         }
       },
       "function_definition_search": {
@@ -361,7 +416,7 @@
         "task": "List all currently running processes, but I only care about the ones related to 'python'. Show me just those.",
         "pass": true,
         "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
-        "function_name": "run_shell_command",
+        "function_name": "shell_exec",
         "python_function": "t_run",
         "parsed_args": {
           "command": "ps aux | grep -i python | grep -v grep"
@@ -379,7 +434,7 @@
         "pass": true,
         "function_name": "ask_user_question",
         "parsed_args": {
-          "question": "Do you want to overwrite /tmp/test.txt directly, or should I create a backup first before making any changes?"
+          "question": "Before I start, would you like to overwrite /tmp/test.txt directly, or should I create a backup of it first?"
         }
       },
       "imperative_must": {
@@ -404,17 +459,18 @@
         "task": "I'm not sure whether you want me to overwrite /tmp/test.txt or make a backup first. Which do you prefer?",
         "system": "You are a helpful assistant with tool access.",
         "pass": false,
-        "function_name": null,
-        "parsed_args": null,
-        "raw_content": "That's a thoughtful question \u2014 and honestly, it depends on the situation. My general preference is:\n\n**Make a backup first** \u2014 it's almost always the safer choice. Overwriting destroys the original content, and if it turns out you needed that file later (or the new write is corrupted/incomplete), you're out of luck. A backup is cheap insurance.\n\nHowever, there are cases where a backup is unnecessary overhead:\n\n- The file is a known throwaway (e.g., generated cache, logs you don't care about)\n- The content is trivially regenerable\n- The file is already version-controlled (Git, etc.)\n- You explicitly intend to replace it and don't care about the old version\n\nSo my real preference is: **back up by default, skip only when you're sure it doesn't matter.**\n\nIf you'd like, I can check what's currently in `/tmp/test.txt` (if it exists) and then either:\n\n1. Copy it to `/tmp/test.txt.bak` before doing whatever you need, or\n2. Just overwrite it directly if you confirm that's fine\n\nWhich would you like? Or feel free to tell me what you're actually trying to do with the file and I can recommend a concrete approach."
+        "function_name": "shell_exec",
+        "parsed_args": {
+          "command": "ls -la /tmp/test.txt 2>/dev/null && echo \"---\" && cat /tmp/test.txt 2>/dev/null || echo \"File does not exist\""
+        }
       },
       "ambiguous_no_ask_word": {
         "task": "There's ambiguity about whether /tmp/test.txt should be overwritten or backed up before I proceed. Resolve it.",
         "system": "You are a helpful assistant with tool access.",
         "pass": false,
-        "function_name": "run_shell_command",
+        "function_name": "shell_exec",
         "parsed_args": {
-          "command": "ls -la /tmp/test.txt 2>&1; echo \"---\"; cat /tmp/test.txt 2>&1"
+          "command": "ls -la /tmp/test.txt 2>&1; echo \"---\"; file /tmp/test.txt 2>&1; echo \"---\"; cat /tmp/test.txt 2>&1"
         }
       },
       "destructive_warning": {
@@ -423,7 +479,7 @@
         "pass": true,
         "function_name": "ask_user_question",
         "parsed_args": {
-          "question": "The action on /tmp/test.txt is destructive and irreversible. How would you like to proceed? (A) Overwrite /tmp/test.txt directly, or (B) Back it up first, then proceed with the overwrite?"
+          "question": "The operation on /tmp/test.txt is destructive and irreversible. Would you like me to (A) overwrite /tmp/test.txt as-is, or (B) back it up first (e.g., copy to /tmp/test.txt.bak) before overwriting? Please confirm which option you prefer."
         }
       },
       "options_style": {
@@ -432,7 +488,7 @@
         "pass": true,
         "function_name": "ask_user_question",
         "parsed_args": {
-          "question": "How would you like to proceed?"
+          "question": "How would you like to proceed with /tmp/test.txt?"
         }
       },
       "system_nudge": {
@@ -441,7 +497,7 @@
         "pass": true,
         "function_name": "ask_user_question",
         "parsed_args": {
-          "question": "Would you like to overwrite /tmp/test.txt, or create a backup of it first before proceeding?"
+          "question": "Do you want to overwrite /tmp/test.txt directly, or create a backup of it first?"
         }
       }
     },
@@ -452,9 +508,9 @@
     "gram_knowledge_results": {
       "update_file": {
         "task": "You need to edit the file /tmp/test.py: replace the exact string 'x = 1' with 'x = 42'. Express this change as a patch using the exact format OpenAI's apply_patch tool expects (the same patch envelope format used by Codex CLI). Respond with ONLY the raw patch text -- no prose, no JSON, no markdown code fences.",
-        "pass": false,
-        "error": "No terminal matches '*' in the current parser context, at line 2 col 1\n\n*** Update File /tmp/test.py\n^\nExpected one of: \n\t* __ANON_3\n\t* __ANON_2\n\t* __ANON_4\n",
-        "raw_content": "*** Begin Patch\n*** Update File /tmp/test.py\n@@\n-x = 1\n+x = 42\n*** End Patch"
+        "pass": true,
+        "error": null,
+        "raw_content": "*** Begin Patch\n*** Update File: /tmp/test.py\n@@\n-x = 1\n+x = 42\n*** End Patch"
       },
       "add_file": {
         "task": "You need to create a new file /tmp/hello.txt containing exactly: Hello, world! Express this as a patch using the exact format OpenAI's apply_patch tool expects (the same patch envelope format used by Codex CLI). Respond with ONLY the raw patch text -- no prose, no JSON, no markdown code fences.",
@@ -463,7 +519,7 @@
         "raw_content": "*** Begin Patch\n*** Add File: /tmp/hello.txt\n+Hello, world!\n*** End Patch"
       }
     },
-    "gram_knowledge_passed": 1,
+    "gram_knowledge_passed": 2,
     "gram_knowledge_total": 2
   },
   "gram_transport_test": {
@@ -497,11 +553,11 @@
         "pass": true,
         "supported": true,
         "error": null,
-        "chunk_count": 40,
+        "chunk_count": 35,
         "reconstructed_content": "1\n2\n3\n4\n5\n6\n7\n8",
         "finish_reason": "stop",
-        "time_to_first_chunk_seconds": 0.543,
-        "total_seconds": 2.007
+        "time_to_first_chunk_seconds": 0.32,
+        "total_seconds": 0.881
       }
     },
     "stream_passed": 1,
@@ -514,24 +570,82 @@
         "error": null,
         "found": true,
         "field": "reasoning_content",
-        "chars": 326
+        "chars": 370
       },
       "effort_control_native": {
         "pass": true,
         "error": null,
         "found": true,
         "field": "reasoning_content",
-        "chars": 269
+        "chars": 442
       },
       "effort_control_extra_body": {
         "pass": true,
         "error": null,
         "found": true,
         "field": "reasoning_content",
-        "chars": 319
+        "chars": 564
       }
     },
     "reason_passed": 3,
     "reason_total": 3
+  },
+  "agentknit_test": {
+    "akdef_results": {
+      "read_file": {
+        "expected_tool": "read_file",
+        "called_tool": "read_file",
+        "arguments": {
+          "path": "/tmp/llmprobe_akdef_s5sso6n1/hello.txt"
+        },
+        "tool_selected": true,
+        "dispatch_ok": true,
+        "effect_verified": true,
+        "error": null,
+        "dispatch_result": "<af5a955a>hello agentknit\n</af5a955a>",
+        "pass": true
+      },
+      "write_file": {
+        "expected_tool": "write_file",
+        "called_tool": "write_file",
+        "arguments": {
+          "path": "/tmp/llmprobe_akdef_s5sso6n1/write_target.txt",
+          "content": "hello world\n"
+        },
+        "tool_selected": true,
+        "dispatch_ok": true,
+        "effect_verified": true,
+        "error": null,
+        "dispatch_result": "OK: wrote 12 bytes to /tmp/llmprobe_akdef_s5sso6n1/write_target.txt",
+        "pass": true
+      },
+      "str_replace": {
+        "expected_tool": "str_replace",
+        "called_tool": "read_file",
+        "arguments": {
+          "path": "/tmp/llmprobe_akdef_s5sso6n1/update_target.py"
+        },
+        "tool_selected": false,
+        "dispatch_ok": false,
+        "effect_verified": false,
+        "error": "called 'read_file' instead of 'str_replace'",
+        "pass": false
+      },
+      "exec_shell": {
+        "expected_tool": "exec_shell",
+        "called_tool": "exec_shell",
+        "arguments": {
+          "command": "ls -la /tmp/llmprobe_akdef_s5sso6n1"
+        },
+        "tool_selected": true,
+        "dispatch_ok": true,
+        "effect_verified": true,
+        "error": null,
+        "dispatch_result": "{\"stdout\":\"total 12\\ndrwx------  2 martin martin  100 Aug 26 08:24 .\\ndrwxrwxrwt 67 root   root   4400 Aug 26 08:24 ..\\n-rw-r-----  1 martin martin   16 Aug 26 08:24 hello.txt\\n-rw-r-----  1 martin martin    6 Aug 26 08:24 update_target.py\\n-rw-r-----  1 martin martin   12 Aug 26 08:24 write_target.txt\\n\",\"stderr\":\"\",\"returncode\":0}",
+        "pass": true
+      }
+    },
+    "akdef_passed": 3,
+    "akdef_total": 4
   }
 }

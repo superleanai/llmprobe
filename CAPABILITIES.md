@@ -54,6 +54,28 @@ against the full tool schema.
   `Always`
 - **Source:** `askq_test` (enabled with `--askq-test`)
 
+## `AKDEF`
+
+**Capability:** Model understands and correctly uses agentknit's actual
+shipped default tool schema -- `read_file`, `write_file`, `str_replace`,
+`exec_shell` -- imported live from `agentknit._core._DEFAULT_TOOL_SCHEMA`,
+not reconstructed here. All four tools are offered together, one task per
+tool; each resulting call is dispatched through agentknit's real
+`dispatch()` (with `_DEFAULT_TOOL_DISPATCH`'s param renames, e.g.
+`old_str`/`new_str` -> `old`/`new`) against a disposable scratch directory.
+A PASS requires the right tool selected *and* the correct on-disk (or
+subprocess) effect -- e.g. `str_replace` must actually flip the target
+file's content, `exec_shell`'s dispatched command must exit 0. This is
+both a new-model compatibility check (does this model work with
+agentknit's defaults at all?) and a regression test to rerun after
+fine-tuning a model against agentknit's tool contract, since it tracks
+`agentknit._core` directly and needs no manual schema updates when that
+default schema changes.
+
+- **Unit:** tasks passed / tasks run (tool selected AND on-disk effect correct)
+- **Range:** 0 to 4 tasks
+- **Source:** `agentknit_test` (enabled by default; disable with `--no-agentknit-test`; requires `agentknit` importable)
+
 ## `TSEL`
 
 **Capability:** Model selects the right tool from the full competing schema
@@ -178,13 +200,18 @@ dropping them. See `~/bin/copilot-notes.md` for the full writeup.
   (`behaviour.structured_tool_calls` / `.inline_json_in_content` /
   `.no_call_detected`). The markdown report shows both under one `TCALL`
   heading.
-- `QUOTE`, `GREP`, `ASKQ`, `GRAMK`, `GRAMT`, `RJSON`, `STRM`, and `REASN`
-  are on by default (`--quote-test` / `--efficiency-test` / `--askq-test` /
-  `--gram-knowledge-test` / `--gram-transport-test` / `--rjson-test` /
-  `--stream-test` / `--reasoning-test`); pass the `--no-*` form of any flag
-  to skip it, in which case its JSON field is `null` and the markdown
-  report omits the section. `TSEL` has no flag — it's always available
-  once the main probe runs.
+- `QUOTE`, `GREP`, `ASKQ`, `GRAMK`, `GRAMT`, `RJSON`, `STRM`, `REASN`, and
+  `AKDEF` are on by default (`--quote-test` / `--efficiency-test` /
+  `--askq-test` / `--gram-knowledge-test` / `--gram-transport-test` /
+  `--rjson-test` / `--stream-test` / `--reasoning-test` /
+  `--agentknit-test`); pass the `--no-*` form of any flag to skip it, in
+  which case its JSON field is `null` and the markdown report omits the
+  section. `TSEL` has no flag — it's always available once the main probe
+  runs.
+- Unlike every other test, `AKDEF` actually executes the model's tool
+  calls (writes files, runs a shell command) against a disposable temp
+  directory via agentknit's real `dispatch()`, rather than only inspecting
+  the call shape. Its per-item failures are tagged `AKDEF_<tool>`.
 - `TSEL` is scored directly from the full-schema Round-2 calls. Its per-item
   failures are tagged `TSEL_<op>`, consistently with `QUOTE_<op>`,
   `GREP_<op>`, and `ASKQ_<variant>`.

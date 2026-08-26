@@ -20,6 +20,7 @@ so different models and endpoints can be compared side by side.
 | `STRM` | Endpoint delivers real incremental SSE chunks under `stream:true` |
 | `REASN` | Reasoning tokens exposed, and whether reasoning-effort syntax is accepted |
 | `TSEL` | Model calls the right tool in a list |
+| `AKDEF` | Model uses agentknit's real default tools (`read_file`/`write_file`/`str_replace`/`exec_shell`) correctly end to end |
 
 Full definitions, units, and ranges: [CAPABILITIES.md](CAPABILITIES.md).
 
@@ -56,6 +57,10 @@ internally, non-OpenAI transport) can be probed in place of an HTTP
 endpoint with `--script path/to/script.py`; the script must read one
 Chat-Completions JSON payload from stdin and print one JSON response to
 stdout.
+
+`AKDEF` needs `agentknit` importable (a sibling checkout on `sys.path`,
+editable-installed); if it isn't, the test reports an error and every
+other capability still runs. Skip it explicitly with `--no-agentknit-test`.
 
 Run `python3 probe_inference.py --help` for every flag.
 
