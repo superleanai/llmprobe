@@ -305,9 +305,19 @@ def _save_probe(label: str, messages: list[dict],
         json.dump(data, f, indent=2)
 
 
+def _probe_temperature() -> int:
+    """Return a temperature accepted by the active endpoint.
+
+    Kimi's Coding API currently permits only its default temperature (1),
+    whereas the probe normally uses 0 for repeatable elicitation.
+    """
+    return 1 if "api.kimi.com/coding/" in ENDPOINT else 0
+
+
 def chat(client: openai.OpenAI, messages: list[dict], tools: list[dict] | None = None,
          tool_choice="auto") -> openai.types.chat.ChatCompletion:
-    kwargs: dict = dict(model=MODEL, messages=messages, temperature=0, timeout=300)
+    kwargs: dict = dict(model=MODEL, messages=messages,
+                        temperature=_probe_temperature(), timeout=300)
     if tools:
         kwargs["tools"] = tools
         kwargs["tool_choice"] = tool_choice
@@ -1635,7 +1645,7 @@ def response_format_test_round(client: openai.OpenAI) -> dict:
         resp = client.chat.completions.create(
             model=MODEL,
             messages=messages,
-            temperature=0,
+            temperature=_probe_temperature(),
             timeout=300,
             response_format={
                 "type": "json_schema",
@@ -1761,7 +1771,7 @@ def stream_test_round(client: openai.OpenAI) -> dict:
     t0 = time.monotonic()
     try:
         stream = client.chat.completions.create(
-            model=MODEL, messages=messages, temperature=0, timeout=300, stream=True,
+            model=MODEL, messages=messages, temperature=_probe_temperature(), timeout=300, stream=True,
         )
         chunks: list = []
         content = ""
