@@ -457,6 +457,19 @@ _FORMAT_PATTERNS: list[tuple[str, str]] = [
 ]
 
 
+def _detect_call_format(msg) -> tuple[str, str]:
+    """Return the transport/style detected in one completion message."""
+    raw_content = msg.content or ""
+    if msg.tool_calls:
+        return "structured_tool_calls", raw_content
+    for fmt, pattern in _FORMAT_PATTERNS:
+        if re.search(pattern, raw_content, re.IGNORECASE):
+            return fmt, raw_content
+    if extract_json_block(raw_content):
+        return "inline_json", raw_content
+    return "unknown", raw_content
+
+
 def format_detection_round(client: openai.OpenAI) -> dict:
     """Round 0 -- detect the model's preferred tool-call output format."""
     section("Round 0 -- Tool-call format detection")
@@ -467,30 +480,74 @@ def format_detection_round(client: openai.OpenAI) -> dict:
     resp = chat(client, messages, tools=_FORMAT_PROBE_TOOL)
     _save_probe("round0_format_detection", messages, resp, tools=_FORMAT_PROBE_TOOL)
 
-    msg         = resp.choices[0].message
-    raw_content = msg.content or ""
+    msg = resp.choices[0].message
+    detected, raw_content = _detect_call_format(msg)
 
-    detected = "unknown"
-    if msg.tool_calls:
-        detected = "structured_tool_calls"
-    else:
-        for fmt, pattern in _FORMAT_PATTERNS:
-            if re.search(pattern, raw_content, re.IGNORECASE):
-                detected = fmt
-                break
-        else:
-            if extract_json_block(raw_content):
-                detected = "inline_json"
+    # Do not offer a function schema here: this deliberately checks whether
+    # the model can serialize an XML-style call in message content when the
+    # task explicitly requests it, rather than merely noticing XML by chance.
+    xml_messages = [
+        {
+            "role": "system",
+            "content": "You are testing tool-call serialization. Follow the requested output format exactly.",
+        },
+        {
+            "role": "user",
+            "content": (
+                "Return ONLY this XML-style call to read /etc/hostname; no prose, Markdown, "
+                "or JSON outside the XML envelope:\n"
+                '<tool_call>{"name":"read_file","arguments":{"path":"/etc/hostname"}}</tool_call>'
+            ),
+        },
+    ]
+    try:
+        xml_resp = chat(client, xml_messages)
+        _save_probe("round0_xml_tool_call", xml_messages, xml_resp)
+        xml_msg = xml_resp.choices[0].message
+        xml_detected, xml_content = _detect_call_format(xml_msg)
+        xml_call = _extract_xml_tool_call(xml_content) if not xml_msg.tool_calls else None
+        xml_name, xml_args = xml_call if xml_call else (None, None)
+        xml_passed = bool(
+            xml_detected in {"xml_tool_call", "xml_toolcall"}
+            and xml_name == "read_file"
+            and isinstance(xml_args, dict)
+            and xml_args.get("path") == "/etc/hostname"
+        )
+        xml_result = {
+            "pass": xml_passed,
+            "detected_format": xml_detected,
+            "structured_tool_calls": bool(xml_msg.tool_calls),
+            "function_name": xml_name,
+            "arguments": xml_args,
+            "raw_content_snippet": xml_content[:300] or None,
+            "error": None,
+        }
+    except Exception as e:
+        xml_result = {
+            "pass": False,
+            "detected_format": None,
+            "structured_tool_calls": None,
+            "function_name": None,
+            "arguments": None,
+            "raw_content_snippet": None,
+            "error": str(e),
+        }
 
     result = {
         "detected_format":            detected,
         "has_structured_tool_calls":  bool(msg.tool_calls),
         "raw_content_snippet":        raw_content[:300] or None,
+        "xml_tool_call_test":          xml_result,
     }
     print(f"  detected_format           : {detected}")
     print(f"  has_structured_tool_calls : {result['has_structured_tool_calls']}")
     if raw_content:
         print(f"  raw content snippet       : {raw_content[:200]!r}")
+    if xml_result["error"]:
+        print(f"  XML tool-call test        : ERROR -- {xml_result['error']}")
+    else:
+        print(f"  XML tool-call test        : {'PASS' if xml_result['pass'] else 'FAIL'} "
+              f"(detected `{xml_result['detected_format']}`)")
     return result
 
 
@@ -2127,6 +2184,20 @@ def render_markdown_report(output: dict) -> str:
     else:
         lines.append(f"- Round-0 probe (single call): detected format `{fmt.get('detected_format', '?')}`, "
                      f"structured tool_calls used: {fmt.get('has_structured_tool_calls')}")
+        xml_test = fmt.get("xml_tool_call_test")
+        if xml_test:
+            if xml_test.get("error"):
+                lines.append(f"- Explicit XML tool-call task: ERROR — {_md_escape(xml_test['error'])}")
+            else:
+                outcome = "PASS" if xml_test.get("pass") else "FAIL"
+                lines.append(
+                    f"- Explicit XML tool-call task (`<tool_call>` read_file envelope): {outcome}; "
+                    f"detected format `{xml_test.get('detected_format', '?')}`, "
+                    f"structured tool_calls used: {xml_test.get('structured_tool_calls')}"
+                )
+        else:
+            lines.append("- Explicit XML tool-call task (`<tool_call>` read_file envelope): "
+                         "*(not run — rerun the probe with this version)*")
         lines.append("")
     if behaviour:
         structured = behaviour.get("structured_tool_calls", 0)
@@ -2464,7 +2535,7 @@ def render_markdown_report(output: dict) -> str:
         lines.append("N/A")
     lines.append("")
 
-    return "\n".join(lines)
+    return re.sub(r"[ \t]+\n", "\n", "\n".join(lines))
 
 
 def _find_missing_capabilities(output: dict) -> list[str]:

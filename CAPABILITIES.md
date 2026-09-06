@@ -17,6 +17,12 @@ message content (or XML tags, or no detectable call at all).
   for the full multi-op probe)
 - **Source:** `format_detection`, `behaviour`
 
+The format-detection round includes both a normal schema-backed call and an
+explicit, schema-free XML serialization task. The XML task asks for a
+`<tool_call>` envelope containing a `read_file` invocation and passes only
+when the envelope and its parsed name/arguments are correct; it is reported
+separately in each Markdown report rather than folded into the TCALL score.
+
 ## `QUOTE`
 
 **Capability:** Model preserves literal double-quote characters inside JSON
