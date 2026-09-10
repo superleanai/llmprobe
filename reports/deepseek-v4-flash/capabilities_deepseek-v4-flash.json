@@ -647,5 +647,52 @@
     },
     "akdef_passed": 3,
     "akdef_total": 4
+  },
+  "cache_ttl_test": {
+    "samples": {
+      "prime": {
+        "prompt_tokens": 2262,
+        "completion_tokens": 58,
+        "cached_tokens": 0,
+        "latency_seconds": 1.414
+      },
+      "delay_30s": {
+        "prompt_tokens": 2265,
+        "completion_tokens": 50,
+        "cached_tokens": 2048,
+        "latency_seconds": 1.289
+      },
+      "delay_120s": {
+        "prompt_tokens": 2265,
+        "completion_tokens": 89,
+        "cached_tokens": 2048,
+        "latency_seconds": 1.147
+      },
+      "delay_300s": {
+        "prompt_tokens": 2265,
+        "completion_tokens": 38,
+        "cached_tokens": 2048,
+        "latency_seconds": 1.029
+      },
+      "delay_600s": {
+        "prompt_tokens": 2265,
+        "completion_tokens": 60,
+        "cached_tokens": 2048,
+        "latency_seconds": 1.1
+      }
+    },
+    "delays_seconds": [
+      30,
+      120,
+      300,
+      600
+    ],
+    "cache_observed": true,
+    "ttl_min_seconds": 600,
+    "ttl_max_seconds": null,
+    "ttl_min_minutes": 10.0,
+    "ttl_max_minutes": null,
+    "measured_ttl_seconds": null,
+    "measured_ttl_minutes": null
   }
 }
