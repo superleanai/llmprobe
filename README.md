@@ -62,6 +62,10 @@ stdout.
 editable-installed); if it isn't, the test reports an error and every
 other capability still runs. Skip it explicitly with `--no-agentknit-test`.
 
+`CACH` (empirical prompt-cache TTL measurement) is the one test that is
+off by default — it takes several minutes of real waiting. Enable it with
+`--cache-ttl-test`.
+
 Run `python3 probe_inference.py --help` for every flag.
 
 ### Re-render a report without re-probing

@@ -197,6 +197,23 @@ dropping them. See `~/bin/copilot-notes.md` for the full writeup.
 
 ## Notes on scoring
 
+## `CACH`
+
+**Capability:** Endpoint prompt-cache TTL, measured empirically. The probe
+primes the cache with a large fixed prefix (~2500 tokens), then re-sends the
+exact same prefix (only a trailing question differs) after increasing delays
+(30s, 120s, 300s, 600s), stopping at the first cold sample. Warmth is judged
+from the provider-reported cached-token count
+(`usage.prompt_cache_hit_tokens`, `usage.cached_tokens`,
+`usage.prompt_tokens_details.cached_tokens`, ...): a sample is WARM when at
+least half of its prompt tokens (and at least 500) come back cached.
+
+- **Unit:** seconds / minutes (a measured range, not a pass/fail score)
+- **Range:** bracketed between the last warm and the first cold delay; a TTL
+  has no right or wrong value, so this capability is informational only
+- **Source:** `cache_ttl_test` (off by default — takes several minutes;
+  enable with `--cache-ttl-test`)
+
 - All ten capabilities are pass/fail per task; the reported value is
   `passed/total`, not a normalized score. Compare N against the same
   codename's range before comparing two models' fractions.
@@ -236,3 +253,8 @@ dropping them. See `~/bin/copilot-notes.md` for the full writeup.
   implicit/ambiguous framing; it is not a statistically robust reliability
   estimate for any single phrasing. A low `ASKQ` score means "this model's
   ask-the-user behavior is phrasing-fragile," not "this model never asks."
+- `CACH` is the only capability that is off by default: measuring a TTL
+  takes several minutes of real waiting (one prime plus the delay of the
+  first cold rung). Enable it with `--cache-ttl-test`. Unlike every other
+  capability it is informational, not pass/fail, so it never appears in the
+  "Missing capabilities" section when skipped.

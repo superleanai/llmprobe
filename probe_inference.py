@@ -32,6 +32,7 @@ inline JSON in the message content.
 import argparse
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -126,6 +127,20 @@ def parse_args() -> argparse.Namespace:
                         "directory, verifying both tool selection and the on-disk effect. "
                         "Requires agentknit to be importable. On by default; pass "
                         "--no-agentknit-test to skip.")
+    p.add_argument("--cache-ttl-test", action=argparse.BooleanOptionalAction,
+                   dest="cache_ttl_test", default=False,
+                   help="Run an extra round that empirically measures the endpoint's "
+                        "prompt-cache TTL by re-sending a large fixed prompt at "
+                        "increasing delays and finding where the cached-token count "
+                        "collapses. Off by default (it takes several minutes); pass "
+                        "--cache-ttl-test to enable. Use --cache-ttl-only to run just "
+                        "this round against an existing report, skipping all other "
+                        "rounds.")
+    p.add_argument("--cache-ttl-only", action="store_true", dest="cache_ttl_only",
+                   help="Run only the CACH prompt-cache TTL round: load the existing "
+                        "capabilities_<model>.json, add/refresh its cache_ttl_test "
+                        "section, re-render the markdown, and exit. Implies "
+                        "--cache-ttl-test. Requires a previous full probe run.")
     p.add_argument("--api-type", default="openai-completions",
                    choices=["openai-completions", "openai-responses", "anthropic-messages"],
                    help="The *actual* backend transport behind the endpoint/script, for "
@@ -255,7 +270,7 @@ _RESULT_KEYS = (
     "behaviour", "tool_dispatch", "dispatch_conflicts",
     "quote_test", "token_efficiency_test", "askq_test",
     "gram_knowledge_test", "gram_transport_test", "rjson_test",
-    "stream_test", "reasoning_test", "agentknit_test",
+    "stream_test", "reasoning_test", "agentknit_test", "cache_ttl_test",
 )
 
 
@@ -2088,6 +2103,175 @@ def agentknit_default_tools_test_round(client: openai.OpenAI) -> dict:
     return {"akdef_results": results, "akdef_passed": passed, "akdef_total": total}
 
 
+# -- CACH test -----------------------------------------------------------------
+#
+# Empirically measures the endpoint's prompt-cache TTL: prime the cache with a
+# large fixed prefix, then re-send the exact same prefix (with only a distinct
+# trailing question) after increasing delays and watch the provider-reported
+# cached-prompt-token count (`usage.prompt_cache_hit_tokens`,
+# `usage.cached_tokens` / `usage.prompt_tokens_details.cached_tokens`). While a
+# delay still shows a warm cache, the TTL is longer; the first delay at which
+# the cached-token count collapses to ~0 brackets the TTL. The probe stops
+# early at the first cold sample, so it takes roughly one prime plus the delay
+# of the first cold rung -- usually a few minutes, which is why it is off by
+# default (`--cache-ttl-test` to enable).
+#
+# The result is informational rather than pass/fail: a TTL has no right or
+# wrong value. It only fails when the endpoint never reports cached tokens at
+# all (no observable prompt cache) or never answers.
+
+_CACH_TOKEN_TARGET   = 2500   # rough token budget for the fixed prefix
+_CACH_DELAYS_SECONDS = (30, 120, 300, 600)
+_CACH_WARM_FRACTION  = 0.5    # cached >= fraction of prompt tokens -> warm
+_CACH_WARM_MIN       = 500    # absolute floor: ignore trivial sub-prefix matches
+
+
+class _CachChatError(Exception):
+    """The endpoint refused the bare cache-TTL probe call itself."""
+
+
+def _cach_build_prefix() -> str:
+    """Build a large, fixed prompt prefix (~_CACH_TOKEN_TARGET tokens)."""
+    words = ("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda "
+             "mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega "
+             "cache prompt token latency provider endpoint sample probe").split()
+    rng = random.Random(42)  # deterministic across runs/delays
+    lines = ["The following reference text is fixed. Read it once and keep it "
+             "in mind; the actual question comes after it.", ""]
+    i = 0
+    while len("\n".join(lines)) // 4 < _CACH_TOKEN_TARGET:
+        sent = " ".join(rng.choice(words) for _ in range(50))
+        lines.append(f"Paragraph {i}: {sent}.")
+        i += 1
+    return "\n".join(lines)
+
+
+def _cach_cached_tokens(resp) -> int | None:
+    """Extract the provider-reported cached-prompt-token count, if any."""
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return None
+    dump = usage.model_dump() if hasattr(usage, "model_dump") else {}
+    for field in ("prompt_cache_hit_tokens", "cached_tokens",
+                  "cache_read_input_tokens", "prompt_tokens_cached"):
+        val = dump.get(field)
+        if isinstance(val, int) and not isinstance(val, bool):
+            return val
+    details = dump.get("prompt_tokens_details") or {}
+    val = details.get("cached_tokens")
+    if isinstance(val, int) and not isinstance(val, bool):
+        return val
+    return None
+
+
+def cache_ttl_test_round(client: openai.OpenAI) -> dict:
+    section("CACH test -- empirically measuring the endpoint's prompt-cache TTL")
+    print("\nPrimes the cache with a large fixed prefix, then re-sends the same prefix")
+    print("after increasing delays, stopping at the first cold (cache-miss) sample.")
+    print("The TTL is bracketed between the last warm and the first cold delay.\n")
+
+    prefix = _cach_build_prefix()
+
+    def _one_call(tag: str) -> dict:
+        messages = [
+            {"role": "user",
+             "content": f"{prefix}\n\nQuestion ({tag}): in one word, what colour is the sky?"},
+        ]
+        t0 = time.monotonic()
+        # This test needs a bare tools-free request -- going through chat()
+        # would send tools=None verbatim, which some endpoints (e.g. Kimi's
+        # Coding API) 400 on.
+        try:
+            resp = client.chat.completions.create(
+                model=MODEL, messages=messages,
+                temperature=_probe_temperature(), timeout=300)
+        except Exception as e:
+            raise _CachChatError(str(e)) from e
+        usage = getattr(resp, "usage", None)
+        sample = {
+            "prompt_tokens":     getattr(usage, "prompt_tokens", None) if usage else None,
+            "completion_tokens": getattr(usage, "completion_tokens", None) if usage else None,
+            "cached_tokens":     _cach_cached_tokens(resp),
+            "latency_seconds":   round(time.monotonic() - t0, 3),
+        }
+        return {"messages": messages, "resp": resp, "sample": sample}
+
+    samples: dict[str, dict] = {}
+
+    try:
+        prime = _one_call("prime")
+    except _CachChatError as e:
+        print(f"[prime] endpoint refused the bare probe call -- {e}")
+        return {"error": f"prime request failed: {str(e)[:500]}"}
+    samples["prime"] = prime["sample"]
+    if _PROBE_DIR is not None:
+        _save_probe("cache_ttl_prime", prime["messages"], prime["resp"])
+    print(f"[prime] prompt_tokens={prime['sample']['prompt_tokens']} "
+          f"cached={prime['sample']['cached_tokens']}")
+
+    ttl_min = None   # last delay still warm (seconds)
+    ttl_max = None   # first delay observed cold (seconds)
+    for delay in _CACH_DELAYS_SECONDS:
+        print(f"[delay {delay}s] waiting before re-sending the same prefix...")
+        time.sleep(delay)
+        try:
+            run = _one_call(f"delay_{delay}s")
+        except _CachChatError as e:
+            print(f"[delay {delay}s] endpoint refused the bare probe call -- {e}")
+            return {"error": f"request at delay {delay}s failed: {str(e)[:500]}",
+                    "samples": samples}
+        sample = run["sample"]
+        samples[f"delay_{delay}s"] = sample
+        if _PROBE_DIR is not None:
+            _save_probe(f"cache_ttl_delay_{delay}s", run["messages"], run["resp"])
+        prompt = sample["prompt_tokens"] or 0
+        cached = sample["cached_tokens"]
+        warm = cached is not None and cached >= max(_CACH_WARM_MIN, _CACH_WARM_FRACTION * prompt)
+        print(f"[delay {delay}s] prompt_tokens={prompt} cached={cached} "
+              f"-> {'WARM' if warm else 'COLD'}")
+        if warm:
+            ttl_min = delay
+        elif cached is None:
+            # the endpoint never reports cached tokens: the cache is not
+            # observable from here, so a TTL cannot be measured at all
+            print("\nCACH summary: no cached tokens ever reported -- no observable prompt cache")
+            return {"samples": samples, "delays_seconds": list(_CACH_DELAYS_SECONDS),
+                    "cache_observed": False,
+                    "error": "no cached tokens ever reported; prompt cache not observable "
+                             "from this endpoint"}
+        else:
+            ttl_max = delay
+            break
+
+    if ttl_min is None and ttl_max is None:
+        print("\nCACH summary: no cached tokens ever reported -- no observable prompt cache")
+        return {"samples": samples, "delays_seconds": list(_CACH_DELAYS_SECONDS),
+                "cache_observed": False,
+                "error": "no cached tokens ever reported; prompt cache not observable "
+                         "from this endpoint"}
+
+    result: dict = {
+        "samples": samples,
+        "delays_seconds": list(_CACH_DELAYS_SECONDS),
+        "cache_observed": True,
+        "ttl_min_seconds": ttl_min,
+        "ttl_max_seconds": ttl_max,
+        "ttl_min_minutes": round(ttl_min / 60, 2) if ttl_min is not None else None,
+        "ttl_max_minutes": round(ttl_max / 60, 2) if ttl_max is not None else None,
+    }
+    if ttl_max is not None:
+        result["measured_ttl_seconds"] = (ttl_min or 0) + (ttl_max - (ttl_min or 0)) / 2
+        result["measured_ttl_minutes"] = round(result["measured_ttl_seconds"] / 60, 2)
+        print(f"\nCACH summary: TTL between {ttl_min or 0}s and {ttl_max}s "
+              f"(midpoint estimate {result['measured_ttl_minutes']} min)")
+    else:
+        result["measured_ttl_seconds"] = None
+        result["measured_ttl_minutes"] = None
+        print(f"\nCACH summary: still warm after {ttl_min}s -- TTL > {ttl_min}s "
+              f"(upper bound not reached)")
+    return result
+
+
 # -- markdown report -----------------------------------------------------------
 
 def _md_escape(text: str) -> str:
@@ -2111,11 +2295,11 @@ def render_markdown_report(output: dict) -> str:
     lines.append("")
     if commit:
         lines.append(
-            "Generated by [llmprobe](https://github.com/monperrus/llmprobe) "
-            f"at commit [`{commit}`](https://github.com/monperrus/llmprobe/commit/{commit})."
+            "Generated by [llmprobe](https://github.com/superleanai/llmprobe) "
+            f"at commit [`{commit}`](https://github.com/superleanai/llmprobe/commit/{commit})."
         )
     else:
-        lines.append("Generated by [llmprobe](https://github.com/monperrus/llmprobe).")
+        lines.append("Generated by [llmprobe](https://github.com/superleanai/llmprobe).")
     lines.append("")
     lines.append(f"- **Endpoint:** {endpoint}")
     lines.append(f"- **API type:** {output.get('api_type', 'OpenAI Completions')}")
@@ -2136,6 +2320,7 @@ def render_markdown_report(output: dict) -> str:
     stream_test = output.get("stream_test")
     reasoning_test = output.get("reasoning_test")
     agentknit_test = output.get("agentknit_test")
+    cache_ttl_test = output.get("cache_ttl_test")
 
     lines.append("## Capabilities summary")
     lines.append("")
@@ -2189,6 +2374,19 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"| `AKDEF` | *(error: {_md_escape(agentknit_test['error'])})* |")
     else:
         lines.append("| `AKDEF` | *(not run — rerun without `--no-agentknit-test`)* |")
+    if cache_ttl_test and "error" not in cache_ttl_test:
+        ttl_min = cache_ttl_test.get("ttl_min_minutes")
+        ttl_max = cache_ttl_test.get("ttl_max_minutes")
+        if ttl_min is not None and ttl_max is not None:
+            lines.append(f"| `CACH` | TTL between {ttl_min} and {ttl_max} min |")
+        elif ttl_min is not None:
+            lines.append(f"| `CACH` | TTL > {ttl_min} min |")
+        else:
+            lines.append("| `CACH` | cache observed, TTL < first delay |")
+    elif cache_ttl_test and cache_ttl_test.get("error"):
+        lines.append(f"| `CACH` | *(error: {_md_escape(cache_ttl_test['error'])})* |")
+    else:
+        lines.append("| `CACH` | *(not run — rerun with `--cache-ttl-test`)* |")
     tsel_test = output.get("tsel_test")
     if tsel_test and "error" not in tsel_test:
         tsel_passed = tsel_test.get("tsel_passed", 0)
@@ -2547,6 +2745,48 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"Error: {reasoning_test['error']}")
         lines.append("")
 
+    if cache_ttl_test and "error" not in cache_ttl_test:
+        samples = cache_ttl_test.get("samples") or {}
+        lines.append("## Prompt-cache TTL measurement (`CACH`)")
+        lines.append("")
+        lines.append("Empirical prompt-cache TTL: the probe primes the cache with a large "
+                     "fixed prefix, then re-sends the exact same prefix after increasing "
+                     "delays, stopping at the first cold (cache-miss) sample. WARM means "
+                     "the provider reported most prompt tokens as cached; COLD means the "
+                     "cache entry had expired. A TTL has no right or wrong value \u2014 this "
+                     "section is informational, not pass/fail.")
+        lines.append("")
+        ttl_min = cache_ttl_test.get("ttl_min_seconds")
+        ttl_max = cache_ttl_test.get("ttl_max_seconds")
+        if ttl_min is not None and ttl_max is not None:
+            lines.append(f"- **Measured TTL: between {ttl_min}s and {ttl_max}s** "
+                         f"(midpoint estimate {cache_ttl_test.get('measured_ttl_minutes')} min)")
+        elif ttl_min is not None:
+            lines.append(f"- **Measured TTL: > {ttl_min}s** (still warm at the longest probed delay)")
+        else:
+            lines.append("- **Measured TTL: < first probed delay** (already cold on the first re-send)")
+        lines.append("")
+        lines.append("| Sample | Prompt tokens | Cached tokens | Latency (s) | Verdict |")
+        lines.append("|---|---|---|---|---|")
+        for label, s in samples.items():
+            prompt = s.get("prompt_tokens") or 0
+            cached = s.get("cached_tokens")
+            if label == "prime":
+                verdict = "prime"
+            elif cached is None:
+                verdict = "unknown"
+            else:
+                verdict = "WARM" if cached >= max(500, 0.5 * prompt) else "COLD"
+            lines.append(f"| {label} | {s.get('prompt_tokens', '?')} | "
+                         f"{cached if cached is not None else '*(not reported)*'} | "
+                         f"{s.get('latency_seconds', '?')} | {verdict} |")
+        lines.append("")
+    elif cache_ttl_test and cache_ttl_test.get("error"):
+        lines.append("## Prompt-cache TTL measurement (`CACH`)")
+        lines.append("")
+        lines.append(f"Error: {cache_ttl_test['error']}")
+        lines.append("")
+
     lines.append("## Missing capabilities")
     lines.append("")
     problems = _find_missing_capabilities(output)
@@ -2690,6 +2930,12 @@ def _find_missing_capabilities(output: dict) -> list[str]:
             if not r.get("pass"):
                 problems.append(f"`AKDEF_{op}` FAILED — {r.get('error', 'unknown reason')}")
 
+    cache_ttl_test = output.get("cache_ttl_test")
+    if cache_ttl_test is None:
+        pass  # opt-in measurement (--cache-ttl-test); absence is not a gap
+    elif cache_ttl_test.get("error"):
+        problems.append(f"`CACH` test failed to run: {cache_ttl_test['error']}")
+
     return problems
 
 
@@ -2725,6 +2971,29 @@ def main():
         print(f"Rendered {md_path} from {out_path} (no probing performed)")
         return
 
+    if args.cache_ttl_only:
+        if not Path(out_path).exists():
+            sys.exit(f"Cannot run --cache-ttl-only: {out_path} does not exist. "
+                     "Run the full probe first.")
+        _init_probe_dir(safe_model)
+        with open(out_path) as f:
+            output = json.load(f)
+        if args.script:
+            client = ScriptClient(args.script)
+        else:
+            api_key = get_api_key(args.key_name)
+            client  = make_client(api_key)
+        print(f"Target: {ENDPOINT}")
+        print(f"Model:  {MODEL}")
+        output["cache_ttl_test"] = cache_ttl_test_round(client)
+        md_path = _capabilities_md_path(out_path)
+        with open(out_path, "w") as f:
+            json.dump(output, f, indent=2)
+        with open(md_path, "w") as f:
+            f.write(render_markdown_report(output))
+        print(f"\nReport written to {out_path} and {md_path}")
+        return
+
     _init_probe_dir(safe_model)
     previous = _load_previous_report(out_path)
 
@@ -2751,6 +3020,7 @@ def main():
         "stream_test":          None,
         "reasoning_test":       None,
         "agentknit_test":       None,
+        "cache_ttl_test":       None,
     }
 
     md_path = _capabilities_md_path(out_path)
@@ -2955,6 +3225,18 @@ def main():
             else:
                 output["agentknit_test"] = {"error": str(e)}
                 print(f"\nERROR in AKDEF test round: {e}")
+
+    if args.cache_ttl_test:
+        try:
+            ct = cache_ttl_test_round(client)
+            output["cache_ttl_test"] = ct
+        except Exception as e:
+            if _keep_previous_result(e, previous, "cache_ttl_test"):
+                output["cache_ttl_test"] = previous["cache_ttl_test"]
+                print(f"\nERROR in CACH test round (429): {e} -- keeping previous run's result")
+            else:
+                output["cache_ttl_test"] = {"error": str(e)}
+                print(f"\nERROR in CACH test round: {e}")
 
     save()
 
