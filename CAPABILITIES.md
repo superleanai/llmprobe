@@ -221,6 +221,47 @@ least half of its prompt tokens (and at least 500) come back cached.
 - **Source:** `cache_ttl_test` (off by default — takes several minutes;
   enable with `--cache-ttl-test`)
 
+## Context window
+
+**Metric:** The model's context-window size, recovered from the endpoint itself
+rather than from documentation. Reported as `context_window` in the JSON (not a
+codename-scored capability, so it has no `passed/total`), plus a header line and
+a `## Context window` section in the Markdown report.
+
+Two endpoint-owned sources are tried in order of trust:
+
+1. **`/models` metadata** (`source: api_metadata`) — providers that publish
+   per-model limits are believed first: OpenRouter and Kimi return
+   `context_length`, and the Copilot API returns
+   `capabilities.limits.{max_context_window_tokens,max_prompt_tokens,max_output_tokens}`
+   (the extras are kept in the entry's `metadata`). The official DeepSeek and
+   z.ai endpoints publish no limits at all.
+2. **The endpoint's own rejection** (`source: api_error_message`) — one
+   deliberately oversized prompt is sent and the limit is parsed out of the
+   error body ("This model's maximum context length is 1048576 tokens",
+   "prompt token count of N exceeds the limit of M"). A rejected request
+   produces no tokens, so this costs one request and nothing else. A smaller
+   probe is only attempted when the failure was a transport/body-size error
+   (413) that never reached the model; a context rejection that names no number
+   ends the search, because a smaller prompt could only be *accepted* and yield
+   a useless lower bound.
+
+- **Kind:** `context_window` (prompt plus completion, as DeepSeek, OpenRouter,
+  Kimi and z.ai describe it) or `max_prompt_tokens` (the Copilot API's *prompt*
+  ceiling, which is the binding number for a request). The two are kept apart
+  because silently mixing them would make reports incomparable.
+- **Not recovered?** An endpoint that neither advertises limits nor names them
+  in its errors (z.ai answers an oversized prompt with a bare `Prompt exceeds
+  max length`) leaves the entry unknown; record a value by hand with
+  `--context-tokens N --context-source ... --context-evidence ...`, which stores
+  the number verbatim with its provenance.
+- **Escalation guard:** if the oversized prompt is *accepted*, the value is
+  recorded as a lower bound (`lower_bound: true`) and nothing larger is sent — a
+  prompt that big is billed for real, so the probe never escalates against a
+  model with a huge window.
+- **Source:** `context_window` (on by default; pass `--no-context-test` to
+  skip). `--context-only` refreshes just this field on an existing report.
+
 - All ten capabilities are pass/fail per task; the reported value is
   `passed/total`, not a normalized score. Compare N against the same
   codename's range before comparing two models' fractions.
@@ -238,6 +279,10 @@ least half of its prompt tokens (and at least 500) come back cached.
   which case its JSON field is `null` and the markdown report omits the
   section. `TSEL` has no flag — it's always available once the main probe
   runs.
+- The context window is data, not a score: it lives in the top-level
+  `context_window` field (see "Context window" above), is always attempted
+  (`--context-test`, on by default), and is refreshed on an existing report
+  with `--context-only`.
 - Unlike every other test, `AKDEF` actually executes the model's tool
   calls (writes files, runs a shell command) against a disposable temp
   directory via agentknit's real `dispatch()`, rather than only inspecting

@@ -37,6 +37,8 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from textwrap import indent
 
@@ -55,6 +57,7 @@ API_TYPE_LABELS = {
 }
 
 _PROBE_DIR: Path | None = None
+_KEY_NAME: str | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -141,6 +144,33 @@ def parse_args() -> argparse.Namespace:
                         "capabilities_<model>.json, add/refresh its cache_ttl_test "
                         "section, re-render the markdown, and exit. Implies "
                         "--cache-ttl-test. Requires a previous full probe run.")
+    p.add_argument("--context-test", action=argparse.BooleanOptionalAction,
+                   dest="context_test", default=True,
+                   help="Recover the model's context-window size: try the endpoint's "
+                        "/models metadata first, then send one deliberately oversized "
+                        "prompt and parse the limit out of the rejection message (a "
+                        "rejected request produces no tokens). If the oversized prompt "
+                        "is accepted the value is recorded as a lower bound and nothing "
+                        "larger is sent. On by default; pass --no-context-test to skip. "
+                        "Use --context-only to run just this round against an existing "
+                        "report.")
+    p.add_argument("--context-only", action="store_true", dest="context_only",
+                   help="Run only the CTX context-window recovery: load the existing "
+                        "capabilities_<model>.json, add/refresh its context_window "
+                        "section, re-render the markdown, and exit. Implies "
+                        "--context-test. Requires a previous full probe run.")
+    p.add_argument("--context-tokens", type=int, default=None, dest="context_tokens",
+                   help="Record this context-window size verbatim instead of probing for "
+                        "it, for endpoints that neither publish limits nor name them in "
+                        "their errors. Pair with --context-evidence to say where the "
+                        "number came from.")
+    p.add_argument("--context-evidence", default=None, dest="context_evidence",
+                   help="Free-text provenance for --context-tokens, stored in the report.")
+    p.add_argument("--context-source", default="explicit", dest="context_source",
+                   choices=("explicit", "api_metadata", "api_error_message",
+                            "empirical_bisection"),
+                   help="How the --context-tokens value was obtained, recorded verbatim in "
+                        "the report. Default: explicit.")
     p.add_argument("--api-type", default="openai-completions",
                    choices=["openai-completions", "openai-responses", "anthropic-messages"],
                    help="The *actual* backend transport behind the endpoint/script, for "
@@ -271,6 +301,7 @@ _RESULT_KEYS = (
     "quote_test", "token_efficiency_test", "askq_test",
     "gram_knowledge_test", "gram_transport_test", "rjson_test",
     "stream_test", "reasoning_test", "agentknit_test", "cache_ttl_test",
+    "context_window",
 )
 
 
@@ -2353,6 +2384,277 @@ def cache_ttl_test_round(client: openai.OpenAI) -> dict:
     return result
 
 
+# -- context-window recovery (CTX) ---------------------------------------------
+#
+# The context window is the number an agent needs to size its prompt budget, so
+# every probe tries to recover it. Both sources below are the endpoint speaking
+# for itself, tried in order of trust:
+#
+#   1. endpoint metadata -- GET {base}/models, where providers that publish
+#      per-model limits expose them: OpenRouter and Kimi return `context_length`,
+#      and the Copilot API returns `capabilities.limits.*` (context window, max
+#      prompt, max output). The official DeepSeek and z.ai endpoints publish no
+#      limits at all.
+#   2. the endpoint's own rejection -- send one deliberately oversized prompt and
+#      parse the limit out of the error message ("This model's maximum context
+#      length is 1048576 tokens", "prompt token count of N exceeds the limit of
+#      M"). A rejected request produces no tokens, so this costs one request and
+#      nothing else.
+#
+# If the endpoint *accepts* the oversized prompt, the value is recorded as a
+# lower bound and nothing larger is sent: a prompt that large is billed for real,
+# so the probe never escalates against a model with a huge window. When neither
+# source names a limit -- z.ai answers an oversized prompt with a bare "Prompt
+# exceeds max length" and publishes no metadata -- the entry is recorded as
+# unknown unless a value is supplied explicitly with --context-tokens.
+#
+# `kind` records which limit the number is: a true context window (prompt plus
+# completion) as DeepSeek/OpenRouter/Kimi describe it, or the max *prompt* tokens
+# the Copilot API enforces, which is the binding number for a request. Mixing the
+# two silently would make reports incomparable.
+
+_CTX_OVERSIZED_TOKENS = 1_200_000
+_CTX_FALLBACK_TOKENS  = 200_000
+
+# Provider metadata fields carrying a per-model limit, most specific first.
+_CTX_METADATA_FIELDS = (
+    "max_context_window_tokens", "context_length", "context_window",
+    "context_window_tokens", "max_context_length", "max_context_tokens",
+    "max_prompt_tokens", "input_token_limit",
+)
+
+# Limits worth reporting alongside the context window but never mistaken for it.
+_CTX_EXTRA_FIELDS = ("max_output_tokens", "max_prompt_images")
+
+# Endpoint rejection messages that name the limit. Each pattern's single capture
+# group is the token count.
+_CTX_ERROR_PATTERNS = (
+    r"maximum context length is\s+(\d+)",
+    r"exceeds the limit of\s+(\d+)",
+    r"maximum context length of\s+(\d+)",
+    r"max(?:imum)? context (?:length|window)[^0-9]{0,24}(\d{3,})",
+    r"(?:prompt|input) (?:token count|tokens)[^0-9]{0,24}(\d{4,})",
+)
+
+
+def _ctx_parse_limit(text: str) -> tuple[int, str] | None:
+    """Pull a token limit out of an endpoint's rejection message, if it names one."""
+    for pattern in _CTX_ERROR_PATTERNS:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            tokens = int(m.group(1))
+            if tokens >= 1000:  # ignore capture noise like a stray small integer
+                return tokens, m.group(0).strip()
+    return None
+
+
+def _ctx_find_model_entry(payload: dict, model_id: str) -> dict | None:
+    """Find this model's entry in a /models response, tolerating id decoration.
+
+    Providers decorate ids differently from the id used on the wire (OpenRouter
+    carries a `vendor/` prefix; a probe may be labelled `k3` while the API calls
+    it `k3-256k`). Match exact first, then case-insensitively, then on the final
+    path segment, and finally on a prefix relationship, so a labelled id still
+    resolves.
+    """
+    entries = payload.get("data")
+    if not isinstance(entries, list):
+        return None
+    ids = [(e.get("id") or "", e) for e in entries if isinstance(e, dict)]
+    for candidate in (model_id, model_id.split("/")[-1]):
+        for entry_id, entry in ids:
+            if entry_id == candidate:
+                return entry
+    for candidate in (model_id, model_id.split("/")[-1]):
+        for entry_id, entry in ids:
+            if entry_id.lower() == candidate.lower():
+                return entry
+    for candidate in (model_id, model_id.split("/")[-1]):
+        for entry_id, entry in ids:
+            if entry_id.lower().endswith(candidate.lower()):
+                return entry
+    return None
+
+
+def _ctx_metadata_limits(entry: dict) -> dict:
+    """Flatten a model entry's advertised limits into {field: int}."""
+    limits: dict = {}
+    stack = [entry]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        for key, value in node.items():
+            if isinstance(value, dict):
+                if key in ("limits", "capabilities", "top_provider"):
+                    stack.append(value)
+            elif isinstance(value, int) and not isinstance(value, bool):
+                if key in _CTX_METADATA_FIELDS or key in _CTX_EXTRA_FIELDS:
+                    limits[key] = value
+    return limits
+
+
+def _ctx_from_metadata() -> dict | None:
+    """Recover the context window from the endpoint's own /models metadata."""
+    if not ENDPOINT.startswith(("http://", "https://")):
+        return None  # a local --script wrapper exposes no metadata over HTTP
+    payload = _ctx_fetch_models()
+    if payload is None:
+        return None
+    entry = _ctx_find_model_entry(payload, MODEL)
+    if entry is None:
+        return None
+    limits = _ctx_metadata_limits(entry)
+    chosen_field = next((f for f in _CTX_METADATA_FIELDS if f in limits), None)
+    if chosen_field is None:
+        return None
+    kind = "max_prompt_tokens" if chosen_field == "max_prompt_tokens" else "context_window"
+    detail = {k: v for k, v in limits.items() if k != chosen_field}
+    return {
+        "tokens":  limits[chosen_field],
+        "kind":    kind,
+        "source":  "api_metadata",
+        "evidence": f"{ENDPOINT.rstrip('/')}/models -> {entry.get('id')}: "
+                    f"{chosen_field}={limits[chosen_field]}",
+        "metadata": detail,
+    }
+
+
+def _ctx_fetch_models() -> dict | None:
+    """GET {endpoint}/models, returning the parsed body or None on any failure."""
+    try:
+        headers = {}
+        if _KEY_NAME:
+            try:
+                key = get_api_key(_KEY_NAME)
+            except SystemExit:
+                key = ""
+            if key.strip():
+                headers["Authorization"] = f"Bearer {key}"
+        url = ENDPOINT.rstrip("/") + "/models"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=60) as response:
+            data = json.load(response)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        # Metadata is a best-effort source; the error-message path still stands.
+        return None
+
+
+def _ctx_from_error(client) -> dict | None:
+    """Recover the context window from the endpoint's own rejection message.
+
+    One oversized prompt is sent. If the endpoint rejects it and names a limit,
+    that is the answer. If it rejects without naming a limit, nothing smaller can
+    teach us more -- a smaller prompt can only ever be *accepted*, which yields a
+    useless lower bound -- so the probe stops rather than spend those tokens. The
+    one exception is a failure that never reached the model (a 413 or a transport
+    error, e.g. a size-capping local wrapper), where a smaller prompt is worth
+    trying because the real limit was never exercised.
+    """
+    for tokens in (_CTX_OVERSIZED_TOKENS, _CTX_FALLBACK_TOKENS):
+        messages = [{"role": "user", "content": "alpha " * tokens}]
+        try:
+            resp = client.chat.completions.create(
+                model=MODEL, messages=messages, max_tokens=16, timeout=900)
+        except Exception as e:
+            text = str(e)
+            parsed = _ctx_parse_limit(text)
+            if parsed:
+                limit, evidence = parsed
+                return {
+                    "tokens":   limit,
+                    "kind":     "max_prompt_tokens" if "prompt" in text.lower()
+                                else "context_window",
+                    "source":   "api_error_message",
+                    "evidence": evidence,
+                    "probed_prompt_tokens": tokens,
+                }
+            if tokens == _CTX_FALLBACK_TOKENS or not _ctx_is_transport_failure(text):
+                return None
+            continue  # never reached the model -- try one smaller prompt
+        usage = getattr(resp, "usage", None)
+        accepted = getattr(usage, "prompt_tokens", None) or tokens
+        return {
+            "tokens":      accepted,
+            "kind":        "context_window",
+            "source":      "accepted_oversized_prompt",
+            "lower_bound": True,
+            "evidence":    f"endpoint accepted a ~{tokens}-token prompt "
+                           f"(prompt_tokens={accepted}); the real limit is at least this",
+        }
+    return None
+
+
+def _ctx_is_transport_failure(text: str) -> bool:
+    """True when a failure looks like the request never reached the model.
+
+    A too-large *body* (413) or a broken connection says nothing about the
+    context window, so those are worth retrying smaller; a context rejection
+    (which this function is only called on when it named no number) is not.
+    """
+    lowered = text.lower()
+    if any(marker in lowered for marker in ("413", "entity too large", "payload too large",
+                                            "request body too large", "connection",
+                                            "timed out", "timeout", "broken pipe")):
+        return True
+    return False
+
+
+def context_window_round(client) -> dict:
+    """Recover the model's context window from metadata, else from a rejection."""
+
+    section("CTX test -- recovering the context window size")
+    print("\nTries the endpoint's own /models metadata first, then falls back to")
+    print("sending one deliberately oversized prompt and parsing the limit out of")
+    print("the rejection message. A rejected request produces no tokens.\n")
+
+    for label, probe_fn in (("metadata", _ctx_from_metadata),
+                            ("oversized prompt", lambda: _ctx_from_error(client))):
+        print(f"[ctx] trying {label}...")
+        result = probe_fn()
+        if result:
+            kind = result.get("kind", "context_window")
+            suffix = " (lower bound)" if result.get("lower_bound") else ""
+            print(f"[ctx] {result['tokens']} tokens ({kind}, via {result['source']}){suffix}")
+            print(f"[ctx] evidence: {result['evidence']}")
+            return result
+        print(f"[ctx] {label} gave no limit")
+
+    print("\nCTX summary: no context window published or named by this endpoint -- "
+          "record one with --context-tokens")
+    return {"tokens": None, "kind": None, "source": None,
+            "error": "no context window advertised in /models metadata and no limit "
+                     "named in the endpoint's rejection message"}
+
+
+def _make_target_client():
+    """Client for the probe target: a local script wrapper, or the HTTP endpoint."""
+    if ENDPOINT.startswith("script:"):
+        return ScriptClient(ENDPOINT.split("script:", 1)[1])
+    return make_client(get_api_key(_KEY_NAME) if _KEY_NAME else "")
+
+
+def _resolve_context_window(args, client_factory) -> dict | None:
+    """Pick the context-window source: an explicit value, else live recovery.
+
+    `client_factory` is only called when live recovery is needed, so recording a
+    known value with --context-tokens requires no credentials at all.
+    """
+    if args.context_tokens is not None:
+        evidence = args.context_evidence or "supplied on the command line"
+        return {
+            "tokens":   args.context_tokens,
+            "kind":     "max_prompt_tokens" if "prompt token" in evidence.lower()
+                        else "context_window",
+            "source":   args.context_source,
+            "evidence": evidence,
+        }
+    if not args.context_test:
+        return None
+    return context_window_round(client_factory())
+
+
 # -- markdown report -----------------------------------------------------------
 
 def _md_escape(text: str) -> str:
@@ -2360,6 +2662,29 @@ def _md_escape(text: str) -> str:
 
 
 _NO_DATA_NOTE = "no data, please rerun the probing"
+
+_CTX_SOURCE_LABELS = {
+    "api_metadata":              "the endpoint's /models metadata",
+    "api_error_message":         "the endpoint's rejection message",
+    "accepted_oversized_prompt": "an accepted oversized prompt",
+    "empirical_bisection":       "empirical bisection",
+    "explicit":                  "the command line",
+}
+
+
+def _md_context_window(output: dict) -> str:
+    """One-line context-window summary for the report's header bullets."""
+    ctx = output.get("context_window")
+    if _capability_absent(output, "context_window") or not ctx:
+        return f"*({_NO_DATA_NOTE})*"
+    tokens = ctx.get("tokens")
+    if tokens is None:
+        return f"unknown — *{_md_escape(ctx.get('error') or 'endpoint named no limit')}*"
+    label = _CTX_SOURCE_LABELS.get(ctx.get("source") or "", ctx.get("source") or "unknown")
+    summary = f"{tokens:,} tokens ({ctx.get('kind') or 'context_window'}, from {label})"
+    if ctx.get("lower_bound"):
+        summary += " — lower bound: the oversized probe was accepted"
+    return summary
 
 
 def _capability_absent(output: dict, key: str) -> bool:
@@ -2407,6 +2732,7 @@ def render_markdown_report(output: dict) -> str:
     lines.append("")
     lines.append(f"- **Endpoint:** {endpoint}")
     lines.append(f"- **API type:** {output.get('api_type', 'OpenAI Completions')}")
+    lines.append(f"- **Context window:** {_md_context_window(output)}")
     if status != "ok":
         lines.append(f"- **Status:** {status}")
     if output.get("error"):
@@ -2525,6 +2851,38 @@ def render_markdown_report(output: dict) -> str:
     else:
         lines.append("| `TSEL` | *(not run)* |")
     lines.append("")
+
+    ctx = output.get("context_window")
+    lines.append("## Context window")
+    lines.append("")
+    if _capability_absent(output, "context_window"):
+        lines.append(f"*({_NO_DATA_NOTE})*")
+        lines.append("")
+    elif not ctx or ctx.get("tokens") is None:
+        lines.append("No context-window limit was recovered for this endpoint.")
+        lines.append("")
+        detail = (ctx or {}).get("error") or "the endpoint neither published limits nor named one in its errors"
+        lines.append(f"Reason: {_md_escape(detail)}")
+        lines.append("")
+    else:
+        tokens = ctx["tokens"]
+        lines.append(f"**{tokens:,} tokens** — recovered from "
+                     f"{_CTX_SOURCE_LABELS.get(ctx.get('source') or '', ctx.get('source') or 'an unknown source')}.")
+        lines.append("")
+        lines.append("| Field | Value |")
+        lines.append("|---|---|")
+        lines.append(f"| Tokens | {tokens:,} |")
+        lines.append(f"| Kind | {ctx.get('kind') or 'context_window'} |")
+        lines.append(f"| Source | `{ctx.get('source') or 'unknown'}` |")
+        if ctx.get("lower_bound"):
+            lines.append("| Confidence | lower bound — the oversized prompt was accepted, "
+                         "so the real limit is at least this |")
+        lines.append(f"| Evidence | {_md_escape(ctx.get('evidence') or '')} |")
+        also = ctx.get("metadata") or {}
+        if also:
+            shown = ", ".join(f"{k}={v:,}" for k, v in also.items())
+            lines.append(f"| Also advertised by the endpoint | {_md_escape(shown)} |")
+        lines.append("")
 
     lines.append("## Format detection & call delivery (`TCALL`)")
     lines.append("")
@@ -3001,6 +3359,13 @@ def _find_missing_capabilities(output: dict) -> list[str]:
     if _capability_absent(output, "format_detection"):
         problems.append(f"`TCALL`: {_NO_DATA_NOTE}.")
 
+    ctx = output.get("context_window")
+    if _capability_absent(output, "context_window"):
+        problems.append(f"Context window: {_NO_DATA_NOTE}.")
+    elif not ctx or ctx.get("tokens") is None:
+        problems.append("Context window: no limit recovered for this endpoint; "
+                        "record one with --context-tokens.")
+
     fmt = output.get("format_detection") or {}
     if fmt.get("error"):
         problems.append(f"`TCALL` format detection (round 0) failed: {fmt['error']}")
@@ -3156,7 +3521,7 @@ def _find_missing_capabilities(output: dict) -> list[str]:
 # -- main ---------------------------------------------------------------------
 
 def main():
-    global ENDPOINT, MODEL
+    global ENDPOINT, MODEL, _KEY_NAME
 
     args = parse_args()
     if args.quick_summary:
@@ -3168,6 +3533,7 @@ def main():
         ENDPOINT = args.endpoint
     if args.model:
         MODEL = args.model
+    _KEY_NAME = args.key_name
 
     safe_model = MODEL.replace("/", "_").replace(":", "_")
     report_dir = Path("reports") / safe_model
@@ -3183,6 +3549,24 @@ def main():
         with open(md_path, "w") as f:
             f.write(render_markdown_report(output))
         print(f"Rendered {md_path} from {out_path} (no probing performed)")
+        return
+
+    if args.context_only:
+        if not Path(out_path).exists():
+            sys.exit(f"Cannot run --context-only: {out_path} does not exist. "
+                     "Run the full probe first.")
+        _init_probe_dir(safe_model)
+        with open(out_path) as f:
+            output = json.load(f)
+        print(f"Target: {ENDPOINT}")
+        print(f"Model:  {MODEL}")
+        output["context_window"] = _resolve_context_window(args, _make_target_client)
+        md_path = _capabilities_md_path(out_path)
+        with open(out_path, "w") as f:
+            json.dump(output, f, indent=2)
+        with open(md_path, "w") as f:
+            f.write(render_markdown_report(output))
+        print(f"\nReport written to {out_path} and {md_path}")
         return
 
     if args.cache_ttl_only:
@@ -3235,6 +3619,7 @@ def main():
         "reasoning_test":       None,
         "agentknit_test":       None,
         "cache_ttl_test":       None,
+        "context_window":       None,
     }
 
     md_path = _capabilities_md_path(out_path)
@@ -3451,6 +3836,17 @@ def main():
             else:
                 output["cache_ttl_test"] = {"error": str(e)}
                 print(f"\nERROR in CACH test round: {e}")
+
+    if args.context_test or args.context_tokens is not None:
+        try:
+            output["context_window"] = _resolve_context_window(args, lambda: client)
+        except Exception as e:
+            if _keep_previous_result(e, previous, "context_window"):
+                output["context_window"] = previous["context_window"]
+                print(f"\nERROR in CTX test round (429): {e} -- keeping previous run's result")
+            else:
+                output["context_window"] = {"error": str(e)}
+                print(f"\nERROR in CTX test round: {e}")
 
     save()
 
