@@ -2359,6 +2359,29 @@ def _md_escape(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
 
 
+_NO_DATA_NOTE = "no data, please rerun the probing"
+
+
+def _capability_absent(output: dict, key: str) -> bool:
+    """True when the report JSON carries no data at all for a capability.
+
+    An *absent* key means the report was written by a probe version that did not
+    have this capability yet, so there is genuinely nothing to render for it.
+    That is different from a key that is present but ``None``: there the probe
+    ran and skipped the test on purpose (``--no-*``), which the report can state
+    exactly rather than claiming there is no data.
+    """
+    return key not in output
+
+
+def _append_no_data_section(lines: list[str], heading: str) -> None:
+    """Emit a capability section whose data is missing from the report JSON."""
+    lines.append(heading)
+    lines.append("")
+    lines.append(f"*({_NO_DATA_NOTE})*")
+    lines.append("")
+
+
 def _capabilities_md_path(out_path: str) -> str:
     """Derive the markdown report path from the JSON output path (same stem, .md)."""
     return str(Path(out_path).with_suffix(".md"))
@@ -2409,53 +2432,75 @@ def render_markdown_report(output: dict) -> str:
     lines.append("")
     lines.append("| Codename | Value |")
     lines.append("|---|---|")
-    if behaviour:
+    if _capability_absent(output, "behaviour"):
+        lines.append(f"| `TCALL` | *({_NO_DATA_NOTE})* |")
+    elif behaviour:
         structured = behaviour.get("structured_tool_calls", 0)
         total_b    = structured + behaviour.get("inline_json_in_content", 0) + behaviour.get("no_call_detected", 0)
         lines.append(f"| `TCALL` | {structured}/{total_b} |")
     else:
         lines.append("| `TCALL` | *(not run)* |")
-    if quote_test and "error" not in quote_test:
+    if _capability_absent(output, "quote_test"):
+        lines.append(f"| `QUOTE` | *({_NO_DATA_NOTE})* |")
+    elif quote_test and "error" not in quote_test:
         lines.append(f"| `QUOTE` | {quote_test.get('quote_test_passed', 0)}/{quote_test.get('quote_test_total', 0)} |")
     else:
         lines.append("| `QUOTE` | *(not run — rerun without `--no-quote-test`)* |")
-    if tok_test and "error" not in tok_test:
+    if _capability_absent(output, "token_efficiency_test"):
+        lines.append(f"| `GREP` | *({_NO_DATA_NOTE})* |")
+    elif tok_test and "error" not in tok_test:
         lines.append(f"| `GREP` | {tok_test.get('token_efficiency_passed', 0)}/{tok_test.get('token_efficiency_total', 0)} |")
     else:
         lines.append("| `GREP` | *(not run — rerun without `--no-efficiency-test`)* |")
-    if askq_test and "error" not in askq_test:
+    if _capability_absent(output, "askq_test"):
+        lines.append(f"| `ASKQ` | *({_NO_DATA_NOTE})* |")
+    elif askq_test and "error" not in askq_test:
         askq_passed = askq_test.get("askq_passed", 0)
         askq_total  = askq_test.get("askq_total", 0)
         lines.append(f"| `ASKQ` | {askq_passed}/{askq_total} ({_likert_label(askq_passed, askq_total)}) |")
     else:
         lines.append("| `ASKQ` | *(not run — rerun without `--no-askq-test`)* |")
-    if gram_knowledge_test and "error" not in gram_knowledge_test:
+    if _capability_absent(output, "gram_knowledge_test"):
+        lines.append(f"| `APPLY_PATCH` | *({_NO_DATA_NOTE})* |")
+    elif gram_knowledge_test and "error" not in gram_knowledge_test:
         lines.append(f"| `APPLY_PATCH` | {gram_knowledge_test.get('gram_knowledge_passed', 0)}/{gram_knowledge_test.get('gram_knowledge_total', 0)} |")
     else:
         lines.append("| `APPLY_PATCH` | *(not run — rerun without `--no-gram-knowledge-test`)* |")
-    if gram_transport_test and "error" not in gram_transport_test:
+    if _capability_absent(output, "gram_transport_test"):
+        lines.append(f"| `GRAMT` | *({_NO_DATA_NOTE})* |")
+    elif gram_transport_test and "error" not in gram_transport_test:
         lines.append(f"| `GRAMT` | {gram_transport_test.get('gram_transport_passed', 0)}/{gram_transport_test.get('gram_transport_total', 0)} |")
     else:
         lines.append("| `GRAMT` | *(not run — rerun without `--no-gram-transport-test`)* |")
-    if rjson_test and "error" not in rjson_test:
+    if _capability_absent(output, "rjson_test"):
+        lines.append(f"| `RJSON` | *({_NO_DATA_NOTE})* |")
+    elif rjson_test and "error" not in rjson_test:
         lines.append(f"| `RJSON` | {rjson_test.get('rjson_passed', 0)}/{rjson_test.get('rjson_total', 0)} |")
     else:
         lines.append("| `RJSON` | *(not run — rerun without `--no-rjson-test`)* |")
-    if stream_test and "error" not in stream_test:
+    if _capability_absent(output, "stream_test"):
+        lines.append(f"| `STRM` | *({_NO_DATA_NOTE})* |")
+    elif stream_test and "error" not in stream_test:
         lines.append(f"| `STRM` | {stream_test.get('stream_passed', 0)}/{stream_test.get('stream_total', 0)} |")
     else:
         lines.append("| `STRM` | *(not run — rerun without `--no-stream-test`)* |")
-    if reasoning_test and "error" not in reasoning_test:
+    if _capability_absent(output, "reasoning_test"):
+        lines.append(f"| `REASN` | *({_NO_DATA_NOTE})* |")
+    elif reasoning_test and "error" not in reasoning_test:
         lines.append(f"| `REASN` | {reasoning_test.get('reason_passed', 0)}/{reasoning_test.get('reason_total', 0)} |")
     else:
         lines.append("| `REASN` | *(not run — rerun without `--no-reasoning-test`)* |")
-    if agentknit_test and "error" not in agentknit_test:
+    if _capability_absent(output, "agentknit_test"):
+        lines.append(f"| `AKDEF` | *({_NO_DATA_NOTE})* |")
+    elif agentknit_test and "error" not in agentknit_test:
         lines.append(f"| `AKDEF` | {agentknit_test.get('akdef_passed', 0)}/{agentknit_test.get('akdef_total', 0)} |")
     elif agentknit_test and agentknit_test.get("error"):
         lines.append(f"| `AKDEF` | *(error: {_md_escape(agentknit_test['error'])})* |")
     else:
         lines.append("| `AKDEF` | *(not run — rerun without `--no-agentknit-test`)* |")
-    if cache_ttl_test and (cache_ttl_test.get("samples") or "error" not in cache_ttl_test):
+    if _capability_absent(output, "cache_ttl_test"):
+        lines.append(f"| `CACH` | *({_NO_DATA_NOTE})* |")
+    elif cache_ttl_test and (cache_ttl_test.get("samples") or "error" not in cache_ttl_test):
         ttl_min = cache_ttl_test.get("ttl_min_minutes")
         ttl_max = cache_ttl_test.get("ttl_max_minutes")
         if ttl_min is not None and ttl_max is not None:
@@ -2466,12 +2511,14 @@ def render_markdown_report(output: dict) -> str:
             lines.append(f"| `CACH` | TTL < {ttl_max} min |")
         else:
             lines.append("| `CACH` | TTL not measurable (no cache reuse) |")
-    elif cache_ttl_test:
+    elif cache_ttl_test and cache_ttl_test.get("error"):
         lines.append(f"| `CACH` | *(error: {_md_escape(cache_ttl_test['error'])})* |")
     else:
         lines.append("| `CACH` | *(not run — rerun with `--cache-ttl-test`)* |")
     tsel_test = output.get("tsel_test")
-    if tsel_test and "error" not in tsel_test:
+    if _capability_absent(output, "tsel_test"):
+        lines.append(f"| `TSEL` | *({_NO_DATA_NOTE})* |")
+    elif tsel_test and "error" not in tsel_test:
         tsel_passed = tsel_test.get("tsel_passed", 0)
         tsel_total = tsel_test.get("tsel_total", 0)
         lines.append(f"| `TSEL` | {tsel_passed}/{tsel_total} |")
@@ -2481,7 +2528,10 @@ def render_markdown_report(output: dict) -> str:
 
     lines.append("## Format detection & call delivery (`TCALL`)")
     lines.append("")
-    if fmt.get("error"):
+    if _capability_absent(output, "format_detection"):
+        lines.append(f"*({_NO_DATA_NOTE})*")
+        lines.append("")
+    elif fmt.get("error"):
         lines.append(f"Error: {fmt['error']}")
         lines.append("")
     else:
@@ -2500,9 +2550,12 @@ def render_markdown_report(output: dict) -> str:
                 )
         else:
             lines.append("- Explicit XML tool-call task (`<tool_call>` read_file envelope): "
-                         "*(not run — rerun the probe with this version)*")
+                         f"*({_NO_DATA_NOTE})*")
         lines.append("")
-    if behaviour:
+    if _capability_absent(output, "behaviour"):
+        lines.append(f"*({_NO_DATA_NOTE})*")
+        lines.append("")
+    elif behaviour:
         structured = behaviour.get("structured_tool_calls", 0)
         inline     = behaviour.get("inline_json_in_content", 0)
         missing    = behaviour.get("no_call_detected", 0)
@@ -2556,7 +2609,9 @@ def render_markdown_report(output: dict) -> str:
                     lines.append(f"| {pname} | {ptype} | {'yes' if pname in required else 'no'} |")
             lines.append("")
 
-    if tsel_test and "error" not in tsel_test:
+    if _capability_absent(output, "tsel_test"):
+        _append_no_data_section(lines, "## Tool-selection test (`TSEL`)")
+    elif tsel_test and "error" not in tsel_test:
         results = tsel_test.get("tsel_results") or {}
         lines.append("## Tool-selection test (`TSEL`)")
         lines.append("")
@@ -2573,7 +2628,9 @@ def render_markdown_report(output: dict) -> str:
             lines.append(f"| {op} | {status} | `{expected}` | `{called}` | {note} |")
         lines.append("")
 
-    if agentknit_test and "error" not in agentknit_test:
+    if _capability_absent(output, "agentknit_test"):
+        _append_no_data_section(lines, "## Agentknit default-tool compatibility test (`AKDEF`)")
+    elif agentknit_test and "error" not in agentknit_test:
         results = agentknit_test.get("akdef_results") or {}
         passed  = agentknit_test.get("akdef_passed", 0)
         total   = agentknit_test.get("akdef_total", 0)
@@ -2619,7 +2676,9 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"Error: {dispatch['error']}")
         lines.append("")
 
-    if quote_test and "error" not in quote_test:
+    if _capability_absent(output, "quote_test"):
+        _append_no_data_section(lines, "## Quote-escaping test (`QUOTE`)")
+    elif quote_test and "error" not in quote_test:
         results = quote_test.get("quote_test_results") or {}
         passed  = quote_test.get("quote_test_passed", 0)
         total   = quote_test.get("quote_test_total", 0)
@@ -2644,7 +2703,9 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"Error: {quote_test['error']}")
         lines.append("")
 
-    if tok_test and "error" not in tok_test:
+    if _capability_absent(output, "token_efficiency_test"):
+        _append_no_data_section(lines, "## Token-efficiency test (`GREP`)")
+    elif tok_test and "error" not in tok_test:
         results = tok_test.get("token_efficiency_results") or {}
         passed  = tok_test.get("token_efficiency_passed", 0)
         total   = tok_test.get("token_efficiency_total", 0)
@@ -2668,7 +2729,9 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"Error: {tok_test['error']}")
         lines.append("")
 
-    if askq_test and "error" not in askq_test:
+    if _capability_absent(output, "askq_test"):
+        _append_no_data_section(lines, "## Ask-user-question phrasing test (`ASKQ`)")
+    elif askq_test and "error" not in askq_test:
         results = askq_test.get("askq_results") or {}
         passed  = askq_test.get("askq_passed", 0)
         total   = askq_test.get("askq_total", 0)
@@ -2692,7 +2755,9 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"Error: {askq_test['error']}")
         lines.append("")
 
-    if gram_knowledge_test and "error" not in gram_knowledge_test:
+    if _capability_absent(output, "gram_knowledge_test"):
+        _append_no_data_section(lines, "## apply_patch grammar-knowledge test (`APPLY_PATCH`)")
+    elif gram_knowledge_test and "error" not in gram_knowledge_test:
         results = gram_knowledge_test.get("gram_knowledge_results") or {}
         passed  = gram_knowledge_test.get("gram_knowledge_passed", 0)
         total   = gram_knowledge_test.get("gram_knowledge_total", 0)
@@ -2717,7 +2782,9 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"Error: {gram_knowledge_test['error']}")
         lines.append("")
 
-    if gram_transport_test and "error" not in gram_transport_test:
+    if _capability_absent(output, "gram_transport_test"):
+        _append_no_data_section(lines, "## Constrained-decoding / custom-tool test (`GRAMT`)")
+    elif gram_transport_test and "error" not in gram_transport_test:
         results = gram_transport_test.get("gram_transport_results") or {}
         passed  = gram_transport_test.get("gram_transport_passed", 0)
         total   = gram_transport_test.get("gram_transport_total", 0)
@@ -2744,7 +2811,9 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"Error: {gram_transport_test['error']}")
         lines.append("")
 
-    if rjson_test and "error" not in rjson_test:
+    if _capability_absent(output, "rjson_test"):
+        _append_no_data_section(lines, "## Structured-output test (`RJSON`)")
+    elif rjson_test and "error" not in rjson_test:
         results = rjson_test.get("rjson_results") or {}
         passed  = rjson_test.get("rjson_passed", 0)
         total   = rjson_test.get("rjson_total", 0)
@@ -2770,7 +2839,9 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"Error: {rjson_test['error']}")
         lines.append("")
 
-    if stream_test and "error" not in stream_test:
+    if _capability_absent(output, "stream_test"):
+        _append_no_data_section(lines, "## SSE streaming test (`STRM`)")
+    elif stream_test and "error" not in stream_test:
         r      = (stream_test.get("stream_results") or {}).get("basic") or {}
         passed = stream_test.get("stream_passed", 0)
         total  = stream_test.get("stream_total", 0)
@@ -2797,7 +2868,9 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"Error: {stream_test['error']}")
         lines.append("")
 
-    if reasoning_test and "error" not in reasoning_test:
+    if _capability_absent(output, "reasoning_test"):
+        _append_no_data_section(lines, "## Reasoning-tokens & effort-control test (`REASN`)")
+    elif reasoning_test and "error" not in reasoning_test:
         results = reasoning_test.get("reason_results") or {}
         passed  = reasoning_test.get("reason_passed", 0)
         total   = reasoning_test.get("reason_total", 0)
@@ -2828,7 +2901,15 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"Error: {reasoning_test['error']}")
         lines.append("")
 
-    if cache_ttl_test and (cache_ttl_test.get("samples") or "error" not in cache_ttl_test):
+    if _capability_absent(output, "cache_ttl_test"):
+        lines.append("## Prompt-cache TTL measurement (`CACH`)")
+        lines.append("")
+        lines.append(f"*({_NO_DATA_NOTE})*")
+        lines.append("")
+        lines.append("`CACH` is an opt-in measurement: rerun the probe with "
+                     "`--cache-ttl-test` to collect it.")
+        lines.append("")
+    elif cache_ttl_test and (cache_ttl_test.get("samples") or "error" not in cache_ttl_test):
         samples = cache_ttl_test.get("samples") or {}
         lines.append("## Prompt-cache TTL measurement (`CACH`)")
         lines.append("")
@@ -2917,6 +2998,9 @@ def _find_missing_capabilities(output: dict) -> list[str]:
     if output.get("error"):
         problems.append(f"Probe aborted early: {output['error']}")
 
+    if _capability_absent(output, "format_detection"):
+        problems.append(f"`TCALL`: {_NO_DATA_NOTE}.")
+
     fmt = output.get("format_detection") or {}
     if fmt.get("error"):
         problems.append(f"`TCALL` format detection (round 0) failed: {fmt['error']}")
@@ -2928,6 +3012,8 @@ def _find_missing_capabilities(output: dict) -> list[str]:
                             "(model's free-form answer was unparseable).")
 
     tsel_test = output.get("tsel_test") or {}
+    if _capability_absent(output, "tsel_test"):
+        problems.append(f"`TSEL`: {_NO_DATA_NOTE}.")
     for op, result in (tsel_test.get("tsel_results") or {}).items():
         if not result.get("pass"):
             problems.append(f"`TSEL_{op}` FAILED — {result.get('error', 'wrong tool selected')}.")
@@ -2949,7 +3035,9 @@ def _find_missing_capabilities(output: dict) -> list[str]:
                         "tool call at all (see probes/<model>/round2_*.json for which ones).")
 
     quote_test = output.get("quote_test")
-    if quote_test is None:
+    if _capability_absent(output, "quote_test"):
+        problems.append(f"`QUOTE`: {_NO_DATA_NOTE}.")
+    elif quote_test is None:
         problems.append("`QUOTE` capability not tested (rerun without --no-quote-test).")
     elif quote_test.get("error"):
         problems.append(f"`QUOTE` test failed to run: {quote_test['error']}")
@@ -2959,7 +3047,9 @@ def _find_missing_capabilities(output: dict) -> list[str]:
                 problems.append(f"`QUOTE_{op}` FAILED — {r.get('error', 'unknown reason')}")
 
     tok_test = output.get("token_efficiency_test")
-    if tok_test is None:
+    if _capability_absent(output, "token_efficiency_test"):
+        problems.append(f"`GREP`: {_NO_DATA_NOTE}.")
+    elif tok_test is None:
         problems.append("`GREP` capability not tested (rerun without --no-efficiency-test).")
     elif tok_test.get("error"):
         problems.append(f"`GREP` test failed to run: {tok_test['error']}")
@@ -2969,7 +3059,9 @@ def _find_missing_capabilities(output: dict) -> list[str]:
                 problems.append(f"`GREP_{op}` FAILED — {r.get('reason', 'unknown reason')}")
 
     askq_test = output.get("askq_test")
-    if askq_test is None:
+    if _capability_absent(output, "askq_test"):
+        problems.append(f"`ASKQ`: {_NO_DATA_NOTE}.")
+    elif askq_test is None:
         problems.append("`ASKQ` capability not tested (rerun without --no-askq-test).")
     elif askq_test.get("error"):
         problems.append(f"`ASKQ` test failed to run: {askq_test['error']}")
@@ -2981,7 +3073,9 @@ def _find_missing_capabilities(output: dict) -> list[str]:
                                 "asking the user.")
 
     gram_knowledge_test = output.get("gram_knowledge_test")
-    if gram_knowledge_test is None:
+    if _capability_absent(output, "gram_knowledge_test"):
+        problems.append(f"`APPLY_PATCH`: {_NO_DATA_NOTE}.")
+    elif gram_knowledge_test is None:
         problems.append("`APPLY_PATCH` capability not tested (rerun without --no-gram-knowledge-test).")
     elif gram_knowledge_test.get("error"):
         problems.append(f"`APPLY_PATCH` test failed to run: {gram_knowledge_test['error']}")
@@ -2991,7 +3085,9 @@ def _find_missing_capabilities(output: dict) -> list[str]:
                 problems.append(f"`APPLY_PATCH_{op}` FAILED — {r.get('error', 'unknown reason')}")
 
     gram_transport_test = output.get("gram_transport_test")
-    if gram_transport_test is None:
+    if _capability_absent(output, "gram_transport_test"):
+        problems.append(f"`GRAMT`: {_NO_DATA_NOTE}.")
+    elif gram_transport_test is None:
         problems.append("`GRAMT` capability not tested (rerun without --no-gram-transport-test).")
     elif gram_transport_test.get("error"):
         problems.append(f"`GRAMT` test failed to run: {gram_transport_test['error']}")
@@ -3001,7 +3097,9 @@ def _find_missing_capabilities(output: dict) -> list[str]:
                 problems.append(f"`GRAMT_{op}` FAILED — {r.get('error', 'unknown reason')}")
 
     rjson_test = output.get("rjson_test")
-    if rjson_test is None:
+    if _capability_absent(output, "rjson_test"):
+        problems.append(f"`RJSON`: {_NO_DATA_NOTE}.")
+    elif rjson_test is None:
         problems.append("`RJSON` capability not tested (rerun without --no-rjson-test).")
     elif rjson_test.get("error"):
         problems.append(f"`RJSON` test failed to run: {rjson_test['error']}")
@@ -3011,7 +3109,9 @@ def _find_missing_capabilities(output: dict) -> list[str]:
                 problems.append(f"`RJSON_{op}` FAILED — {r.get('error', 'unknown reason')}")
 
     stream_test = output.get("stream_test")
-    if stream_test is None:
+    if _capability_absent(output, "stream_test"):
+        problems.append(f"`STRM`: {_NO_DATA_NOTE}.")
+    elif stream_test is None:
         problems.append("`STRM` capability not tested (rerun without --no-stream-test).")
     elif stream_test.get("error"):
         problems.append(f"`STRM` test failed to run: {stream_test['error']}")
@@ -3021,7 +3121,9 @@ def _find_missing_capabilities(output: dict) -> list[str]:
                 problems.append(f"`STRM_{op}` FAILED — {r.get('error', 'unknown reason')}")
 
     reasoning_test = output.get("reasoning_test")
-    if reasoning_test is None:
+    if _capability_absent(output, "reasoning_test"):
+        problems.append(f"`REASN`: {_NO_DATA_NOTE}.")
+    elif reasoning_test is None:
         problems.append("`REASN` capability not tested (rerun without --no-reasoning-test).")
     elif reasoning_test.get("error"):
         problems.append(f"`REASN` test failed to run: {reasoning_test['error']}")
@@ -3031,7 +3133,9 @@ def _find_missing_capabilities(output: dict) -> list[str]:
                 problems.append(f"`REASN_{op}` FAILED — {r.get('error', 'unknown reason')}")
 
     agentknit_test = output.get("agentknit_test")
-    if agentknit_test is None:
+    if _capability_absent(output, "agentknit_test"):
+        problems.append(f"`AKDEF`: {_NO_DATA_NOTE}.")
+    elif agentknit_test is None:
         problems.append("`AKDEF` capability not tested (rerun without --no-agentknit-test).")
     elif agentknit_test.get("error"):
         problems.append(f"`AKDEF` test failed to run: {agentknit_test['error']}")

@@ -6,6 +6,13 @@ Every capability has a stable codename (max 5 characters) used as its key in
 Codenames do not change across probe runs or script versions, so results are
 comparable model-to-model and run-to-run.
 
+Every value in a report comes straight from that run's JSON. When the JSON
+carries no data for a capability at all — the report was produced before the
+capability existed — the report says `no data, please rerun the probing`
+instead of silently dropping the row. A capability the run *deliberately*
+skipped (`--no-*`) is different: its key is present but null, and the report
+says so and names the flag to drop.
+
 ## `TCALL`
 
 **Capability:** Model emits tool invocations via the structured OpenAI
