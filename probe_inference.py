@@ -2146,6 +2146,20 @@ def _cach_build_prefix() -> str:
     return "\n".join(lines)
 
 
+def _cach_provider(resp) -> str | None:
+    """Return the upstream provider name reported for this response, if any.
+
+    OpenRouter load-balances every request across several upstreams (SiliconFlow,
+    Novita, GMICloud, Morph, ...) and echoes the one it picked in a top-level
+    ``provider`` field.  Each upstream has its own prefix cache, so a re-send
+    served by a *different* upstream can never be a cache hit: without this
+    field, a provider switch is indistinguishable from an expired cache entry.
+    """
+    dump = resp.model_dump() if hasattr(resp, "model_dump") else {}
+    val = dump.get("provider")
+    return val if isinstance(val, str) and val else None
+
+
 def _cach_cached_tokens(resp) -> int | None:
     """Extract the provider-reported cached-prompt-token count, if any."""
     usage = getattr(resp, "usage", None)
@@ -2172,19 +2186,24 @@ def cache_ttl_test_round(client: openai.OpenAI) -> dict:
 
     prefix = _cach_build_prefix()
 
-    def _one_call(tag: str) -> dict:
+    def _one_call(tag: str, pin_provider: str | None = None) -> dict:
         messages = [
             {"role": "user",
              "content": f"{prefix}\n\nQuestion ({tag}): in one word, what colour is the sky?"},
         ]
-        t0 = time.monotonic()
         # This test needs a bare tools-free request -- going through chat()
         # would send tools=None verbatim, which some endpoints (e.g. Kimi's
         # Coding API) 400 on.
+        kwargs: dict = dict(model=MODEL, messages=messages,
+                            temperature=_probe_temperature(), timeout=300)
+        if pin_provider:
+            # Load-balanced endpoints pick an upstream per request; pin it so
+            # every re-send hits the upstream that wrote the cache entry.
+            kwargs["extra_body"] = {"provider": {"order": [pin_provider],
+                                                 "allow_fallbacks": False}}
+        t0 = time.monotonic()
         try:
-            resp = client.chat.completions.create(
-                model=MODEL, messages=messages,
-                temperature=_probe_temperature(), timeout=300)
+            resp = client.chat.completions.create(**kwargs)
         except Exception as e:
             raise _CachChatError(str(e)) from e
         usage = getattr(resp, "usage", None)
@@ -2193,6 +2212,7 @@ def cache_ttl_test_round(client: openai.OpenAI) -> dict:
             "completion_tokens": getattr(usage, "completion_tokens", None) if usage else None,
             "cached_tokens":     _cach_cached_tokens(resp),
             "latency_seconds":   round(time.monotonic() - t0, 3),
+            "provider":          _cach_provider(resp),
         }
         return {"messages": messages, "resp": resp, "sample": sample}
 
@@ -2207,7 +2227,51 @@ def cache_ttl_test_round(client: openai.OpenAI) -> dict:
     if _PROBE_DIR is not None:
         _save_probe("cache_ttl_prime", prime["messages"], prime["resp"])
     print(f"[prime] prompt_tokens={prime['sample']['prompt_tokens']} "
-          f"cached={prime['sample']['cached_tokens']}")
+          f"cached={prime['sample']['cached_tokens']} "
+          f"provider={prime['sample'].get('provider') or '?'}")
+
+    # A load-balanced endpoint (OpenRouter) serves each request from a different
+    # upstream by default, which makes a cold re-send ambiguous: it can mean
+    # "cache expired" or just "another upstream".  Pin the provider that answered
+    # the prime call so all re-sends share its cache namespace.
+    pinned_provider = prime["sample"].get("provider")
+    if pinned_provider:
+        print(f"[pin] pinning provider to {pinned_provider!r} for all re-sends")
+    result_provider: dict = {"provider": pinned_provider, "provider_pinned": pinned_provider}
+
+    # Immediate (0-delay) re-send: proves the prefix is cacheable at all on this
+    # provider, before any expiry can be blamed.  Without it, a cold first
+    # delayed sample cannot be told apart from "no cache reuse ever".
+    try:
+        confirm = _one_call("confirm_0s", pin_provider=pinned_provider)
+    except _CachChatError as e:
+        print(f"[confirm_0s] endpoint refused the bare probe call -- {e}")
+        return {"error": f"confirm request failed: {str(e)[:500]}", "samples": samples,
+                **result_provider}
+    samples["confirm_0s"] = confirm["sample"]
+    if _PROBE_DIR is not None:
+        _save_probe("cache_ttl_confirm_0s", confirm["messages"], confirm["resp"])
+    confirm_prompt = confirm["sample"]["prompt_tokens"] or 0
+    confirm_cached = confirm["sample"]["cached_tokens"]
+    confirm_warm = (confirm_cached is not None
+                    and confirm_cached >= max(_CACH_WARM_MIN,
+                                              _CACH_WARM_FRACTION * confirm_prompt))
+    print(f"[confirm_0s] prompt_tokens={confirm_prompt} cached={confirm_cached} "
+          f"provider={confirm['sample'].get('provider') or '?'} "
+          f"-> {'WARM' if confirm_warm else 'COLD'}")
+    if pinned_provider and confirm["sample"].get("provider") not in (None, pinned_provider):
+        print(f"[warn] provider changed despite the pin "
+              f"({pinned_provider!r} -> {confirm['sample'].get('provider')!r}): "
+              f"cache reuse across upstreams is not comparable")
+    if not confirm_warm:
+        print("\nCACH summary: no cache reuse even on an immediate re-send -- the prefix "
+              "is not served from cache on this provider, so no TTL can be measured")
+        return {"samples": samples, "delays_seconds": list(_CACH_DELAYS_SECONDS),
+                "cache_observed": False,
+                "ttl_min_seconds": None, "ttl_max_seconds": None,
+                "ttl_min_minutes": None, "ttl_max_minutes": None,
+                "error": "no cache reuse on an immediate re-send; no TTL measurable",
+                **result_provider}
 
     ttl_min = None   # last delay still warm (seconds)
     ttl_max = None   # first delay observed cold (seconds)
@@ -2215,20 +2279,34 @@ def cache_ttl_test_round(client: openai.OpenAI) -> dict:
         print(f"[delay {delay}s] waiting before re-sending the same prefix...")
         time.sleep(delay)
         try:
-            run = _one_call(f"delay_{delay}s")
+            run = _one_call(f"delay_{delay}s", pin_provider=pinned_provider)
         except _CachChatError as e:
             print(f"[delay {delay}s] endpoint refused the bare probe call -- {e}")
             return {"error": f"request at delay {delay}s failed: {str(e)[:500]}",
-                    "samples": samples}
+                    "samples": samples, **result_provider}
         sample = run["sample"]
         samples[f"delay_{delay}s"] = sample
         if _PROBE_DIR is not None:
             _save_probe(f"cache_ttl_delay_{delay}s", run["messages"], run["resp"])
         prompt = sample["prompt_tokens"] or 0
         cached = sample["cached_tokens"]
+        served_by = sample.get("provider")
         warm = cached is not None and cached >= max(_CACH_WARM_MIN, _CACH_WARM_FRACTION * prompt)
         print(f"[delay {delay}s] prompt_tokens={prompt} cached={cached} "
-              f"-> {'WARM' if warm else 'COLD'}")
+              f"provider={served_by or '?'} -> {'WARM' if warm else 'COLD'}")
+        if pinned_provider and served_by not in (None, pinned_provider):
+            print(f"\nCACH summary: the endpoint answered from a different upstream "
+                  f"({served_by!r} instead of {pinned_provider!r}) despite the provider pin, "
+                  f"so a cache miss here cannot be attributed to expiry -- TTL not measurable")
+            return {"samples": samples, "delays_seconds": list(_CACH_DELAYS_SECONDS),
+                    "cache_observed": False,
+                    "ttl_min_seconds": None, "ttl_max_seconds": None,
+                    "ttl_min_minutes": None, "ttl_max_minutes": None,
+                    "provider_mismatch": {"expected": pinned_provider, "got": served_by},
+                    "error": f"provider switched to {served_by!r} despite pinning to "
+                             f"{pinned_provider!r}; TTL not measurable on a load-balanced "
+                             f"endpoint without a stable upstream",
+                    **result_provider}
         if warm:
             ttl_min = delay
         elif cached is None:
@@ -2238,7 +2316,8 @@ def cache_ttl_test_round(client: openai.OpenAI) -> dict:
             return {"samples": samples, "delays_seconds": list(_CACH_DELAYS_SECONDS),
                     "cache_observed": False,
                     "error": "no cached tokens ever reported; prompt cache not observable "
-                             "from this endpoint"}
+                             "from this endpoint",
+                    **result_provider}
         else:
             ttl_max = delay
             break
@@ -2248,7 +2327,8 @@ def cache_ttl_test_round(client: openai.OpenAI) -> dict:
         return {"samples": samples, "delays_seconds": list(_CACH_DELAYS_SECONDS),
                 "cache_observed": False,
                 "error": "no cached tokens ever reported; prompt cache not observable "
-                         "from this endpoint"}
+                         "from this endpoint",
+                **result_provider}
 
     result: dict = {
         "samples": samples,
@@ -2258,6 +2338,7 @@ def cache_ttl_test_round(client: openai.OpenAI) -> dict:
         "ttl_max_seconds": ttl_max,
         "ttl_min_minutes": round(ttl_min / 60, 2) if ttl_min is not None else None,
         "ttl_max_minutes": round(ttl_max / 60, 2) if ttl_max is not None else None,
+        **result_provider,
     }
     if ttl_max is not None:
         result["measured_ttl_seconds"] = (ttl_min or 0) + (ttl_max - (ttl_min or 0)) / 2
@@ -2374,16 +2455,18 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"| `AKDEF` | *(error: {_md_escape(agentknit_test['error'])})* |")
     else:
         lines.append("| `AKDEF` | *(not run — rerun without `--no-agentknit-test`)* |")
-    if cache_ttl_test and "error" not in cache_ttl_test:
+    if cache_ttl_test and (cache_ttl_test.get("samples") or "error" not in cache_ttl_test):
         ttl_min = cache_ttl_test.get("ttl_min_minutes")
         ttl_max = cache_ttl_test.get("ttl_max_minutes")
         if ttl_min is not None and ttl_max is not None:
             lines.append(f"| `CACH` | TTL between {ttl_min} and {ttl_max} min |")
         elif ttl_min is not None:
             lines.append(f"| `CACH` | TTL > {ttl_min} min |")
+        elif ttl_max is not None:
+            lines.append(f"| `CACH` | TTL < {ttl_max} min |")
         else:
-            lines.append("| `CACH` | cache observed, TTL < first delay |")
-    elif cache_ttl_test and cache_ttl_test.get("error"):
+            lines.append("| `CACH` | TTL not measurable (no cache reuse) |")
+    elif cache_ttl_test:
         lines.append(f"| `CACH` | *(error: {_md_escape(cache_ttl_test['error'])})* |")
     else:
         lines.append("| `CACH` | *(not run — rerun with `--cache-ttl-test`)* |")
@@ -2745,7 +2828,7 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"Error: {reasoning_test['error']}")
         lines.append("")
 
-    if cache_ttl_test and "error" not in cache_ttl_test:
+    if cache_ttl_test and (cache_ttl_test.get("samples") or "error" not in cache_ttl_test):
         samples = cache_ttl_test.get("samples") or {}
         lines.append("## Prompt-cache TTL measurement (`CACH`)")
         lines.append("")
@@ -2753,34 +2836,61 @@ def render_markdown_report(output: dict) -> str:
                      "fixed prefix, then re-sends the exact same prefix after increasing "
                      "delays, stopping at the first cold (cache-miss) sample. WARM means "
                      "the provider reported most prompt tokens as cached; COLD means the "
-                     "cache entry had expired. A TTL has no right or wrong value \u2014 this "
-                     "section is informational, not pass/fail.")
+                     "cache entry had expired. An immediate (0-delay) re-send first proves "
+                     "the prefix is cacheable at all, and on load-balanced endpoints "
+                     "(OpenRouter) the upstream that answered the prime call is pinned for "
+                     "every re-send, since a different upstream has a different cache. "
+                     "A TTL has no right or wrong value \u2014 this section is informational, "
+                     "not pass/fail.")
         lines.append("")
         ttl_min = cache_ttl_test.get("ttl_min_seconds")
         ttl_max = cache_ttl_test.get("ttl_max_seconds")
+        provider = cache_ttl_test.get("provider")
+        if provider:
+            pin_note = ("pinned for every re-send" if cache_ttl_test.get("provider_pinned")
+                        else "not pinned")
+            lines.append(f"- **Upstream provider reported by the endpoint:** `{provider}` "
+                         f"({pin_note})")
+            lines.append("")
         if ttl_min is not None and ttl_max is not None:
             lines.append(f"- **Measured TTL: between {ttl_min}s and {ttl_max}s** "
                          f"(midpoint estimate {cache_ttl_test.get('measured_ttl_minutes')} min)")
         elif ttl_min is not None:
             lines.append(f"- **Measured TTL: > {ttl_min}s** (still warm at the longest probed delay)")
-        else:
+        elif ttl_max is not None:
             lines.append("- **Measured TTL: < first probed delay** (already cold on the first re-send)")
+        else:
+            lines.append("- **TTL: not measurable** (no cache reuse observed, see below)")
         lines.append("")
-        lines.append("| Sample | Prompt tokens | Cached tokens | Latency (s) | Verdict |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| Sample | Prompt tokens | Cached tokens | Latency (s) | Provider | Verdict |")
+        lines.append("|---|---|---|---|---|---|")
         for label, s in samples.items():
             prompt = s.get("prompt_tokens") or 0
             cached = s.get("cached_tokens")
             if label == "prime":
                 verdict = "prime"
+            elif label == "confirm_0s":
+                verdict = "WARM (no delay)" if (cached is not None and cached >= max(500, 0.5 * prompt)) else "COLD (no delay)"
             elif cached is None:
                 verdict = "unknown"
             else:
                 verdict = "WARM" if cached >= max(500, 0.5 * prompt) else "COLD"
             lines.append(f"| {label} | {s.get('prompt_tokens', '?')} | "
                          f"{cached if cached is not None else '*(not reported)*'} | "
-                         f"{s.get('latency_seconds', '?')} | {verdict} |")
+                         f"{s.get('latency_seconds', '?')} | "
+                         f"{s.get('provider') or '\u2014'} | {verdict} |")
         lines.append("")
+        mismatch = cache_ttl_test.get("provider_mismatch")
+        if mismatch:
+            lines.append(f"> The endpoint answered from a different upstream "
+                         f"(`{mismatch.get('got')}`) than the one that primed the cache "
+                         f"(`{mismatch.get('expected')}`), even with provider pinning: on a "
+                         f"load-balanced endpoint a cache miss across upstreams says nothing "
+                         f"about cache expiry, so no TTL is reported.")
+            lines.append("")
+        elif cache_ttl_test.get("cache_observed") is False:
+            lines.append(f"> {cache_ttl_test.get('error')}")
+            lines.append("")
     elif cache_ttl_test and cache_ttl_test.get("error"):
         lines.append("## Prompt-cache TTL measurement (`CACH`)")
         lines.append("")
