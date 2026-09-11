@@ -1,0 +1,723 @@
+{
+  "model": "deepseek/deepseek-v4.1-flash",
+  "llmprobe_commit": "a2e0d34e647eab46910de7ae4376cb05f08ebf3a",
+  "endpoint": "https://openrouter.ai/api/v1",
+  "api_type": "OpenAI Completions",
+  "status": "ok",
+  "error": null,
+  "format_detection": {
+    "detected_format": "structured_tool_calls",
+    "has_structured_tool_calls": true,
+    "raw_content_snippet": null,
+    "xml_tool_call_test": {
+      "pass": true,
+      "detected_format": "xml_tool_call",
+      "structured_tool_calls": false,
+      "function_name": "read_file",
+      "arguments": {
+        "path": "/etc/hostname"
+      },
+      "raw_content_snippet": "<tool_call>{\"name\":\"read_file\",\"arguments\":{\"path\":\"/etc/hostname\"}}</tool_call>",
+      "error": null
+    }
+  },
+  "elicited_names": {
+    "read_file": "read_file",
+    "write_file": "write_file",
+    "update_file": "edit_file",
+    "execute_bash": "run_shell_command",
+    "ask_user_question": "ask_user_question",
+    "list_directory": "list_directory",
+    "search_files": "search_files",
+    "glob": "find_files"
+  },
+  "inferred_tool_schema": [
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Perform the 'read_file' operation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "path"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Perform the 'write_file' operation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "path"
+            },
+            "content": {
+              "type": "string",
+              "description": "content"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "edit_file",
+        "description": "Perform the 'update_file' operation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "path"
+            },
+            "old_str": {
+              "type": "string",
+              "description": "old str"
+            },
+            "new_str": {
+              "type": "string",
+              "description": "new str"
+            }
+          },
+          "required": [
+            "path",
+            "old_str",
+            "new_str"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_shell_command",
+        "description": "Perform the 'execute_bash' operation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "command"
+            }
+          },
+          "required": [
+            "command"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "ask_user_question",
+        "description": "Perform the 'ask_user_question' operation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "question": {
+              "type": "string",
+              "description": "question"
+            }
+          },
+          "required": [
+            "question"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_directory",
+        "description": "Perform the 'list_directory' operation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "path"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_files",
+        "description": "Perform the 'search_files' operation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "path"
+            },
+            "pattern": {
+              "type": "string",
+              "description": "pattern"
+            },
+            "recursive": {
+              "type": "boolean",
+              "description": "recursive"
+            }
+          },
+          "required": [
+            "path",
+            "pattern",
+            "recursive"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "find_files",
+        "description": "Perform the 'glob' operation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "path"
+            },
+            "pattern": {
+              "type": "string",
+              "description": "pattern"
+            },
+            "recursive": {
+              "type": "boolean",
+              "description": "recursive"
+            }
+          },
+          "required": [
+            "path",
+            "pattern",
+            "recursive"
+          ]
+        }
+      }
+    }
+  ],
+  "behaviour": {
+    "call_delivery_mode": "structured_tool_calls",
+    "structured_tool_calls": 8,
+    "inline_json_in_content": 0,
+    "no_call_detected": 0,
+    "note": "Model correctly uses the structured tool_calls API field."
+  },
+  "tool_dispatch": {
+    "read_file": {
+      "python_function": "t_read",
+      "param_map": {
+        "path": "path"
+      }
+    },
+    "write_file": {
+      "python_function": "t_write",
+      "param_map": {
+        "path": "path",
+        "content": "content"
+      }
+    },
+    "run_shell_command": {
+      "python_function": "t_run",
+      "param_map": {
+        "command": "command"
+      }
+    },
+    "ask_user_question": {
+      "python_function": "t_ask_user",
+      "param_map": {
+        "question": "question"
+      }
+    },
+    "list_directory": {
+      "python_function": "t_list_dir",
+      "param_map": {
+        "path": "path"
+      }
+    },
+    "search_files": {
+      "python_function": "t_search",
+      "param_map": {
+        "path": "path",
+        "pattern": "pattern"
+      }
+    },
+    "find_files": {
+      "python_function": "t_glob",
+      "param_map": {}
+    }
+  },
+  "dispatch_conflicts": {
+    "update_file": "read_file"
+  },
+  "tsel_test": {
+    "tsel_results": {
+      "read_file": {
+        "pass": true,
+        "expected_function_name": "read_file",
+        "function_name": "read_file",
+        "error": null
+      },
+      "write_file": {
+        "pass": true,
+        "expected_function_name": "write_file",
+        "function_name": "write_file",
+        "error": null
+      },
+      "update_file": {
+        "pass": false,
+        "expected_function_name": "edit_file",
+        "function_name": "read_file",
+        "error": "called 'read_file' instead of 'edit_file'"
+      },
+      "execute_bash": {
+        "pass": true,
+        "expected_function_name": "run_shell_command",
+        "function_name": "run_shell_command",
+        "error": null
+      },
+      "ask_user_question": {
+        "pass": true,
+        "expected_function_name": "ask_user_question",
+        "function_name": "ask_user_question",
+        "error": null
+      },
+      "list_directory": {
+        "pass": true,
+        "expected_function_name": "list_directory",
+        "function_name": "list_directory",
+        "error": null
+      },
+      "search_files": {
+        "pass": true,
+        "expected_function_name": "search_files",
+        "function_name": "search_files",
+        "error": null
+      },
+      "glob": {
+        "pass": true,
+        "expected_function_name": "find_files",
+        "function_name": "find_files",
+        "error": null
+      }
+    },
+    "tsel_passed": 7,
+    "tsel_total": 8
+  },
+  "quote_test": {
+    "quote_test_results": {
+      "write_file": {
+        "task": "Write the following text exactly to /tmp/quote_test.txt: She said \"hello\" and he replied \"goodbye, world\".",
+        "pass": true,
+        "error": null,
+        "structured": true,
+        "parsed_args": {
+          "path": "/tmp/quote_test.txt",
+          "content": "She said \"hello\" and he replied \"goodbye, world\"."
+        },
+        "isolated": true,
+        "function_name": "write_file"
+      },
+      "execute_bash": {
+        "task": "Run this exact shell command: echo \"hello \\\"world\\\"\"",
+        "pass": true,
+        "error": null,
+        "structured": true,
+        "parsed_args": {
+          "command": "echo \"hello \\\"world\\\"\""
+        },
+        "isolated": true,
+        "function_name": "run_shell_command"
+      },
+      "update_file": {
+        "task": "In /tmp/test.py, replace the string x = \"old value\" with x = \"new value\". Do not rewrite the whole file.",
+        "pass": true,
+        "error": null,
+        "structured": true,
+        "parsed_args": {
+          "path": "/tmp/test.py",
+          "old_str": "x = \"old value\"",
+          "new_str": "x = \"new value\""
+        },
+        "isolated": true,
+        "function_name": "edit_file"
+      }
+    },
+    "quote_test_passed": 3,
+    "quote_test_total": 3
+  },
+  "token_efficiency_test": {
+    "token_efficiency_results": {
+      "large_log_grep": {
+        "task": "The file /var/log/app.log is 500,000 lines long. Find all lines containing the exact string 'FATAL ERROR' and show them to me.",
+        "pass": true,
+        "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
+        "function_name": "run_shell_command",
+        "python_function": "t_run",
+        "parsed_args": {
+          "command": "grep -c 'FATAL ERROR' /var/log/app.log"
+        }
+      },
+      "count_occurrences": {
+        "task": "The file /var/data/access.log has several million lines. Tell me how many lines contain the IP address 203.0.113.42. I only need the count.",
+        "pass": true,
+        "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
+        "function_name": "run_shell_command",
+        "python_function": "t_run",
+        "parsed_args": {
+          "command": "grep -c '203\\.0\\.113\\.42' /var/data/access.log; grep -cE '\\b203\\.0\\.113\\.42\\b' /var/data/access.log"
+        }
+      },
+      "specific_line": {
+        "task": "The file /opt/build/output.txt is over a million lines long. What is on line 48213 of that file?",
+        "pass": true,
+        "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
+        "function_name": "run_shell_command",
+        "python_function": "t_run",
+        "parsed_args": {
+          "command": "sed -n '48213p' /opt/build/output.txt"
+        }
+      },
+      "check_string_exists": {
+        "task": "The file /var/log/build.log is huge (hundreds of thousands of lines). Does the word 'DeprecationWarning' appear anywhere in it? Just answer yes or no.",
+        "pass": true,
+        "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
+        "function_name": "run_shell_command",
+        "python_function": "t_run",
+        "parsed_args": {
+          "command": "grep -c 'DeprecationWarning' /var/log/build.log; echo \"exit: $?\""
+        }
+      },
+      "function_definition_search": {
+        "task": "The file /repo/src/model.py is 20,000 lines long. Find the line number where the function `def train_model` is defined.",
+        "pass": true,
+        "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
+        "function_name": "run_shell_command",
+        "python_function": "t_run",
+        "parsed_args": {
+          "command": "grep -n \"def train_model\" /repo/src/model.py"
+        }
+      },
+      "process_output_filter": {
+        "task": "List all currently running processes, but I only care about the ones related to 'python'. Show me just those.",
+        "pass": true,
+        "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
+        "function_name": "run_shell_command",
+        "python_function": "t_run",
+        "parsed_args": {
+          "command": "ps aux | grep -i python | grep -v grep"
+        }
+      }
+    },
+    "token_efficiency_passed": 6,
+    "token_efficiency_total": 6
+  },
+  "askq_test": {
+    "askq_results": {
+      "original_probe": {
+        "task": "Before you start, ask the user whether they want to overwrite /tmp/test.txt or create a backup first.",
+        "system": "You are a helpful assistant with tool access.",
+        "pass": true,
+        "function_name": "ask_user_question",
+        "parsed_args": {
+          "question": "Before I start, would you like me to overwrite /tmp/test.txt, or create a backup of it first?"
+        }
+      },
+      "imperative_must": {
+        "task": "You must ask the user this exact question before doing anything else: 'Should I overwrite /tmp/test.txt or create a backup first?' Do not perform any other action.",
+        "system": "You are a helpful assistant with tool access.",
+        "pass": true,
+        "function_name": "ask_user_question",
+        "parsed_args": {
+          "question": "Should I overwrite /tmp/test.txt or create a backup first?"
+        }
+      },
+      "explicit_tool_name": {
+        "task": "Call the ask_user_question tool now with the question: 'Overwrite /tmp/test.txt or create a backup first?'",
+        "system": "You are a helpful assistant with tool access.",
+        "pass": true,
+        "function_name": "ask_user_question",
+        "parsed_args": {
+          "question": "Overwrite /tmp/test.txt or create a backup first?"
+        }
+      },
+      "first_person_unsure": {
+        "task": "I'm not sure whether you want me to overwrite /tmp/test.txt or make a backup first. Which do you prefer?",
+        "system": "You are a helpful assistant with tool access.",
+        "pass": false,
+        "function_name": null,
+        "parsed_args": null,
+        "raw_content": "Great question \u2014 I'd lean toward **making a backup first**, since it's the safer, reversible option and costs almost nothing. That way if the overwrite turns out to be the wrong call, we can restore the original.\n\nA quick caveat: I don't actually have any context loaded about `/tmp/test.txt` in this conversation (no prior task or its contents). So before I do anything, a couple of things would help:\n\n1. **What's the goal** for `/tmp/test.txt` \u2014 what content should end up in it?\n2. **Where should the backup go** \u2014 e.g. `/tmp/test.txt.bak`, or a timestamped name like `/tmp/test.txt.2024-01-01.bak`?\n\nIf you just want me to proceed with the safe default, I can:\n- Copy `/tmp/test.txt` \u2192 `/tmp/test.txt.bak` (only if it already exists), then\n- Overwrite `/tmp/test.txt` with the new content.\n\nWant me to go with that, or do you have a different preference?"
+      },
+      "ambiguous_no_ask_word": {
+        "task": "There's ambiguity about whether /tmp/test.txt should be overwritten or backed up before I proceed. Resolve it.",
+        "system": "You are a helpful assistant with tool access.",
+        "pass": false,
+        "function_name": "run_shell_command",
+        "parsed_args": {
+          "command": "ls -la /tmp/test.txt 2>&1; echo \"---\"; cat /tmp/test.txt 2>&1"
+        }
+      },
+      "destructive_warning": {
+        "task": "This action is destructive and irreversible. Before proceeding you MUST get explicit user confirmation on whether to overwrite /tmp/test.txt or back it up first. Ask now.",
+        "system": "You are a helpful assistant with tool access.",
+        "pass": true,
+        "function_name": "ask_user_question",
+        "parsed_args": {
+          "question": "Before I proceed with the destructive, irreversible action on /tmp/test.txt, please confirm how you'd like me to handle it:\n\n1. **Overwrite** /tmp/test.txt (existing contents will be permanently lost)\n2. **Back up first** (I'll copy the current /tmp/test.txt to a backup location, then proceed)\n3. **Neither / cancel** (do not modify the file)\n\nWhich option should I take?"
+        }
+      },
+      "options_style": {
+        "task": "Present the user with two options -- 'Overwrite /tmp/test.txt' or 'Create a backup first' -- and wait for their choice before doing anything.",
+        "system": "You are a helpful assistant with tool access.",
+        "pass": true,
+        "function_name": "ask_user_question",
+        "parsed_args": {
+          "question": "How would you like to proceed with /tmp/test.txt? Option 1: Overwrite /tmp/test.txt. Option 2: Create a backup first."
+        }
+      },
+      "system_nudge": {
+        "task": "Before you start, ask the user whether they want to overwrite /tmp/test.txt or create a backup first.",
+        "system": "You are a helpful assistant with tool access. When a task requires user input, preference, or confirmation before proceeding, you MUST call ask_user_question rather than guessing, investigating, or acting unilaterally.",
+        "pass": true,
+        "function_name": "ask_user_question",
+        "parsed_args": {
+          "question": "Before I start, would you like me to overwrite /tmp/test.txt directly, or create a backup of it first?"
+        }
+      }
+    },
+    "askq_passed": 6,
+    "askq_total": 8
+  },
+  "gram_knowledge_test": {
+    "gram_knowledge_results": {
+      "update_file": {
+        "task": "You need to edit the file /tmp/test.py: replace the exact string 'x = 1' with 'x = 42'. Express this change as a patch using the exact format OpenAI's apply_patch tool expects (the same patch envelope format used by Codex CLI). Respond with ONLY the raw patch text -- no prose, no JSON, no markdown code fences.",
+        "pass": true,
+        "error": null,
+        "raw_content": "*** Begin Patch\n*** Update File: /tmp/test.py\n@@\n-x = 1\n+x = 42\n*** End Patch"
+      },
+      "add_file": {
+        "task": "You need to create a new file /tmp/hello.txt containing exactly: Hello, world! Express this as a patch using the exact format OpenAI's apply_patch tool expects (the same patch envelope format used by Codex CLI). Respond with ONLY the raw patch text -- no prose, no JSON, no markdown code fences.",
+        "pass": true,
+        "error": null,
+        "raw_content": "*** Begin Patch\n*** Add File: /tmp/hello.txt\n+Hello, world!\n*** End Patch"
+      }
+    },
+    "gram_knowledge_passed": 2,
+    "gram_knowledge_total": 2
+  },
+  "gram_transport_test": {
+    "gram_transport_results": {
+      "apply_patch": {
+        "task": "In the file /tmp/test.py, replace the exact string 'x = 1' with 'x = 42'. Do not rewrite the whole file. Use the apply_patch tool.",
+        "pass": false,
+        "error": "request failed: Error code: 422 - {'error': {'message': 'Provider returned error', 'code': 422, 'metadata': {'raw': '{\"detail\":[{\"type\":\"literal_error\",\"loc\":[\"body\",\"tools\",0,\"type\"],\"msg\":\"Input should be \\'function\\'\",\"input\":\"custom\",\"ctx\":{\"expected\":\"\\'function\\'\"}},{\"type\":\"missing\",\"loc\":[\"body\",\"tools\",0,\"function\"],\"msg\":\"Field required\",\"input\":{\"type\":\"custom\",\"custom\":{\"name\":\"apply_patch\",\"description\":\"Use the apply_patch tool to edit files, expressed as a V4A diff.\",\"format\":{\"type\":\"grammar\",\"g",
+        "tool_call_type": null,
+        "raw_input": null
+      }
+    },
+    "gram_transport_passed": 0,
+    "gram_transport_total": 1
+  },
+  "rjson_test": {
+    "rjson_results": {
+      "json_schema": {
+        "pass": true,
+        "supported": true,
+        "schema_conformant": true,
+        "error": null,
+        "parsed_value": "hello",
+        "raw_content": "{\"value\": \"hello\"}"
+      }
+    },
+    "rjson_passed": 1,
+    "rjson_total": 1
+  },
+  "stream_test": {
+    "stream_results": {
+      "basic": {
+        "pass": true,
+        "supported": true,
+        "error": null,
+        "chunk_count": 38,
+        "reconstructed_content": "1\n2\n3\n4\n5\n6\n7\n8",
+        "finish_reason": "stop",
+        "time_to_first_chunk_seconds": 1.314,
+        "total_seconds": 1.5
+      }
+    },
+    "stream_passed": 1,
+    "stream_total": 1
+  },
+  "reasoning_test": {
+    "reason_results": {
+      "reasoning_tokens_present": {
+        "pass": true,
+        "error": null,
+        "found": true,
+        "field": "reasoning",
+        "chars": 296
+      },
+      "effort_control_native": {
+        "pass": true,
+        "error": null,
+        "found": true,
+        "field": "reasoning",
+        "chars": 312
+      },
+      "effort_control_extra_body": {
+        "pass": true,
+        "error": null,
+        "found": true,
+        "field": "reasoning",
+        "chars": 390
+      }
+    },
+    "reason_passed": 3,
+    "reason_total": 3
+  },
+  "agentknit_test": {
+    "akdef_results": {
+      "read_file": {
+        "expected_tool": "read_file",
+        "called_tool": "read_file",
+        "arguments": {
+          "path": "/tmp/llmprobe_akdef_2_68djb2/hello.txt"
+        },
+        "tool_selected": true,
+        "dispatch_ok": true,
+        "effect_verified": true,
+        "error": null,
+        "dispatch_result": "<af5a955a>hello agentknit\n</af5a955a>",
+        "pass": true
+      },
+      "write_file": {
+        "expected_tool": "write_file",
+        "called_tool": "write_file",
+        "arguments": {
+          "path": "/tmp/llmprobe_akdef_2_68djb2/write_target.txt",
+          "content": "hello world\n"
+        },
+        "tool_selected": true,
+        "dispatch_ok": true,
+        "effect_verified": true,
+        "error": null,
+        "dispatch_result": "OK: wrote 12 bytes to /tmp/llmprobe_akdef_2_68djb2/write_target.txt",
+        "pass": true
+      },
+      "str_replace": {
+        "expected_tool": "str_replace",
+        "called_tool": "read_file",
+        "arguments": {
+          "path": "/tmp/llmprobe_akdef_2_68djb2/update_target.py"
+        },
+        "tool_selected": false,
+        "dispatch_ok": false,
+        "effect_verified": false,
+        "error": "called 'read_file' instead of 'str_replace'",
+        "pass": false
+      },
+      "exec_shell": {
+        "expected_tool": "exec_shell",
+        "called_tool": "exec_shell",
+        "arguments": {
+          "command": "ls -la /tmp/llmprobe_akdef_2_68djb2"
+        },
+        "tool_selected": true,
+        "dispatch_ok": true,
+        "effect_verified": true,
+        "error": null,
+        "dispatch_result": "{\"stdout\":\"total 12\\ndrwx------   2 martin martin   100 Sep 11 16:16 .\\ndrwxrwxrwt 780 root   root   31960 Sep 11 16:16 ..\\n-rw-r-----   1 martin martin    16 Sep 11 16:16 hello.txt\\n-rw-r-----   1 martin martin     6 Sep 11 16:16 update_target.py\\n-rw-r-----   1 martin martin    12 Sep 11 16:16 write_target.txt\\n\",\"stderr\":\"\",\"returncode\":0}",
+        "pass": true
+      }
+    },
+    "akdef_passed": 3,
+    "akdef_total": 4
+  },
+  "cache_ttl_test": {
+    "samples": {
+      "prime": {
+        "prompt_tokens": 2262,
+        "completion_tokens": 39,
+        "cached_tokens": 0,
+        "latency_seconds": 5.469,
+        "provider": "DeepInfra"
+      },
+      "confirm_0s": {
+        "prompt_tokens": 2265,
+        "completion_tokens": 81,
+        "cached_tokens": 2176,
+        "latency_seconds": 7.971,
+        "provider": "DeepInfra"
+      },
+      "delay_30s": {
+        "prompt_tokens": 2265,
+        "completion_tokens": 26,
+        "cached_tokens": 2176,
+        "latency_seconds": 6.428,
+        "provider": "DeepInfra"
+      },
+      "delay_120s": {
+        "prompt_tokens": 2265,
+        "completion_tokens": 26,
+        "cached_tokens": 2176,
+        "latency_seconds": 25.653,
+        "provider": "DeepInfra"
+      },
+      "delay_300s": {
+        "prompt_tokens": 2265,
+        "completion_tokens": 51,
+        "cached_tokens": 2176,
+        "latency_seconds": 7.828,
+        "provider": "DeepInfra"
+      },
+      "delay_600s": {
+        "prompt_tokens": 2265,
+        "completion_tokens": 62,
+        "cached_tokens": 0,
+        "latency_seconds": 2.638,
+        "provider": "DeepInfra"
+      }
+    },
+    "delays_seconds": [
+      30,
+      120,
+      300,
+      600
+    ],
+    "cache_observed": true,
+    "ttl_min_seconds": 300,
+    "ttl_max_seconds": 600,
+    "ttl_min_minutes": 5.0,
+    "ttl_max_minutes": 10.0,
+    "provider": "DeepInfra",
+    "provider_pinned": "DeepInfra",
+    "measured_ttl_seconds": 450.0,
+    "measured_ttl_minutes": 7.5
+  }
+}
