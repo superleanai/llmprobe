@@ -648,5 +648,12 @@
     },
     "akdef_passed": 4,
     "akdef_total": 4
+  },
+  "context_window": {
+    "tokens": 922000,
+    "kind": "max_prompt_tokens",
+    "source": "api_error_message",
+    "evidence": "exceeds the limit of 922000",
+    "probed_prompt_tokens": 1200000
   }
 }

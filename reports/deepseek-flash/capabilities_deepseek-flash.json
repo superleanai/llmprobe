@@ -726,5 +726,12 @@
     "provider_pinned": null,
     "measured_ttl_seconds": null,
     "measured_ttl_minutes": null
+  },
+  "context_window": {
+    "tokens": 1048576,
+    "kind": "context_window",
+    "source": "api_error_message",
+    "evidence": "maximum context length is 1048576",
+    "probed_prompt_tokens": 1200000
   }
 }

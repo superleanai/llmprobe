@@ -478,5 +478,11 @@
     },
     "gram_transport_passed": 0,
     "gram_transport_total": 1
+  },
+  "context_window": {
+    "tokens": 1048576,
+    "kind": "context_window",
+    "source": "empirical_bisection",
+    "evidence": "z.ai names no limit (bare 'Prompt exceeds max length', code 1261) and publishes none in /models; bisection: largest accepted prompt reported 1048478 tokens, first rejection at ~1048573 tokens"
   }
 }

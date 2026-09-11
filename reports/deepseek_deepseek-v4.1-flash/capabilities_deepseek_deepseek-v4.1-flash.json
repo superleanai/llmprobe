@@ -719,5 +719,12 @@
     "provider_pinned": "DeepInfra",
     "measured_ttl_seconds": 450.0,
     "measured_ttl_minutes": 7.5
+  },
+  "context_window": {
+    "tokens": 1048576,
+    "kind": "context_window",
+    "source": "api_metadata",
+    "evidence": "https://openrouter.ai/api/v1/models -> deepseek/deepseek-v4.1-flash: context_length=1048576",
+    "metadata": {}
   }
 }

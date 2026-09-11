@@ -349,5 +349,12 @@
     "ttl_max_minutes": null,
     "measured_ttl_seconds": null,
     "measured_ttl_minutes": null
+  },
+  "context_window": {
+    "tokens": 1048576,
+    "kind": "context_window",
+    "source": "api_metadata",
+    "evidence": "https://api.kimi.com/coding/v1/models -> k3: context_length=1048576",
+    "metadata": {}
   }
 }
