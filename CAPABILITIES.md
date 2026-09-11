@@ -310,3 +310,33 @@ Two endpoint-owned sources are tried in order of trust:
   first cold rung). Enable it with `--cache-ttl-test`. Unlike every other
   capability it is informational, not pass/fail, so it never appears in the
   "Missing capabilities" section when skipped.
+- `CORS` is the only capability measured without a model behind it: it is a
+  property of the endpoint's HTTP layer, not of the model, and its two
+  requests carry no Authorization at all, so `--cors-only` refreshes an
+  existing report with no credentials needed.
+
+## CORS
+
+**Capability:** Endpoint answers the CORS preflight a browser must clear
+before calling it cross-origin, so a plain web page (no backend proxy) can
+integrate with it directly. Reported as `cors_test` in the JSON plus a
+`CORS` row in the capabilities table and a `## CORS preflight test` section
+in the Markdown report.
+
+- **Unit:** the `access-control-allow-origin` answer, verbatim
+- **Range:** `*` (wildcard — any origin), the reflected request origin
+  (browser-direct works, with or without `access-control-allow-credentials`),
+  or no header at all (a browser cannot read responses from this endpoint)
+- **Source:** `cors_test` (enabled by default; disable with `--no-cors-test`;
+  refresh an existing report with `--cors-only`)
+
+The probe replays exactly the handshake a browser performs for an SDK call:
+OPTIONS `/chat/completions` with `Origin` and
+`Access-Control-Request-{Method: POST, Headers: authorization, content-type}`,
+then a plain Origin-tagged GET `/models` — because some endpoints answer
+the preflight yet strip the CORS headers from the actual response, which
+breaks the call one request later. `preflight_passed` additionally requires
+`access-control-allow-methods` to cover POST and `access-control-allow-headers`
+to cover both `authorization` and `content-type`; a preflight missing those
+fails in the browser exactly like a missing origin does. The two requests
+carry no Authorization, so this round needs no credentials.

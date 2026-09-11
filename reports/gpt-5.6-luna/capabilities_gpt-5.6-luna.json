@@ -655,5 +655,8 @@
     "source": "api_error_message",
     "evidence": "exceeds the limit of 922000",
     "probed_prompt_tokens": 1200000
+  },
+  "cors_test": {
+    "error": "CORS does not apply: the probe target is a local script wrapper, not an HTTP endpoint"
   }
 }

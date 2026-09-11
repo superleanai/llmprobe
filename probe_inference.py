@@ -171,6 +171,21 @@ def parse_args() -> argparse.Namespace:
                             "empirical_bisection"),
                    help="How the --context-tokens value was obtained, recorded verbatim in "
                         "the report. Default: explicit.")
+    p.add_argument("--cors-test", action=argparse.BooleanOptionalAction,
+                   dest="cors_test", default=True,
+                   help="Run an extra round that replays the CORS preflight a browser "
+                        "sends before a cross-origin POST /chat/completions carrying "
+                        "Authorization and application/json (OPTIONS with Origin and "
+                        "Access-Control-Request-* headers), plus a plain Origin-tagged "
+                        "GET /models, and records the endpoint's access-control-* answer "
+                        "(wildcard '*', reflected origin, or none). No credentials "
+                        "needed. On by default; pass --no-cors-test to skip. Use "
+                        "--cors-only to run just this round against an existing report.")
+    p.add_argument("--cors-only", action="store_true", dest="cors_only",
+                   help="Run only the CORS round: load the existing "
+                        "capabilities_<model>.json, add/refresh its cors_test section, "
+                        "re-render the markdown, and exit. Implies --cors-test. "
+                        "Requires a previous full probe run.")
     p.add_argument("--api-type", default="openai-completions",
                    choices=["openai-completions", "openai-responses", "anthropic-messages"],
                    help="The *actual* backend transport behind the endpoint/script, for "
@@ -301,7 +316,7 @@ _RESULT_KEYS = (
     "quote_test", "token_efficiency_test", "askq_test",
     "gram_knowledge_test", "gram_transport_test", "rjson_test",
     "stream_test", "reasoning_test", "agentknit_test", "cache_ttl_test",
-    "context_window",
+    "context_window", "cors_test",
 )
 
 
@@ -2655,6 +2670,207 @@ def _resolve_context_window(args, client_factory) -> dict | None:
     return context_window_round(client_factory())
 
 
+# -- CORS preflight test (CORS) ------------------------------------------------
+#
+# Whether a plain web page can call the endpoint directly depends on its CORS
+# policy: a browser first sends an OPTIONS preflight (because the request
+# carries Authorization and Content-Type: application/json) and refuses to
+# deliver the response unless the server answers with a matching
+# access-control-allow-origin. So the probe replays exactly that handshake:
+#
+#   1. OPTIONS {base}/chat/completions with Origin, Access-Control-Request-
+#      Method: POST, and Access-Control-Request-Headers: authorization,
+#      content-type -- the preflight every browser sends for an SDK call.
+#   2. GET {base}/models with just Origin set -- some endpoints answer the
+#      preflight yet strip the CORS headers from the actual response, which
+#      breaks the call one request later; the one that worked is the evidence.
+#
+# The requests carry no Authorization, so this round needs no credentials.
+# `allow_origin` records the endpoint's answer verbatim: `*` (any origin can
+# integrate), the echoed request origin (browser-direct works from anywhere,
+# but only without cookies), or null (server sent none). `preflight_passed`
+# additionally requires allow-methods to cover POST and allow-headers to cover
+# both authorization and content-type, since a preflight that omits them fails
+# in the browser just like a missing origin.
+
+_CORS_REQUEST_ORIGIN = "https://llmprobe.example"
+_CORS_REQUEST_HEADERS = "authorization, content-type"
+
+
+def _cors_header(headers, name: str) -> str | None:
+    """Case-insensitively fetch one header from an HTTPResponse / HTTPMessage."""
+    return headers.get(name)
+
+
+def _cors_probe_url(path: str) -> str:
+    return ENDPOINT.rstrip("/") + path
+
+
+def _cors_send(req: urllib.request.Request) -> tuple[int | None, object]:
+    """One HTTP request that never raises; status is None on a transport error."""
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.status, resp.headers
+    except urllib.error.HTTPError as e:
+        # A preflight answered with 4xx/5xx still carries its headers, and that
+        # answer is the datum: many endpoints "handle" OPTIONS with a 404/405.
+        return e.code, e.headers
+    except Exception:
+        return None, {}
+
+
+def _cors_classify(headers) -> dict:
+    origin = _cors_header(headers, "access-control-allow-origin")
+    methods = _cors_header(headers, "access-control-allow-methods") or ""
+    allowed_headers = _cors_header(headers, "access-control-allow-headers") or ""
+    credentials = _cors_header(headers, "access-control-allow-credentials") or ""
+    expose = _cors_header(headers, "access-control-expose-headers") or ""
+    return {
+        "allow_origin":      origin,
+        "allow_methods":     methods or None,
+        "allow_headers":     allowed_headers or None,
+        "allow_credentials": (credentials.lower() == "true") or None,
+        "expose_headers":    expose or None,
+    }
+
+
+def _cors_wildcard(headers) -> dict:
+    """Detail rows for the report: which headers were set and to what."""
+    interesting = (
+        "access-control-allow-origin", "access-control-allow-methods",
+        "access-control-allow-headers", "access-control-allow-credentials",
+        "access-control-expose-headers", "vary",
+    )
+    out: dict[str, str] = {}
+    for name in interesting:
+        value = headers.get(name) if hasattr(headers, "get") else None
+        if value is not None:
+            out[name] = value
+    return out
+
+
+def _cors_run() -> dict:
+    """Replay the browser handshake for POST /chat/completions + GET /models."""
+    preflight = urllib.request.Request(
+        _cors_probe_url("/chat/completions"), method="OPTIONS",
+        headers={"Origin": _CORS_REQUEST_ORIGIN,
+                 "Access-Control-Request-Method": "POST",
+                 "Access-Control-Request-Headers": _CORS_REQUEST_HEADERS})
+    status, headers = _cors_send(preflight)
+    pre = _cors_classify(headers)
+    pre["status"] = status
+    pre["headers"] = _cors_wildcard(headers)
+    pre["pass"] = bool(
+        status is not None
+        and pre["allow_origin"] is not None
+        and "POST" in pre["allow_methods"].upper()
+        and all(h in pre["allow_headers"].lower()
+                for h in ("authorization", "content-type")))
+
+    actual = urllib.request.Request(
+        _cors_probe_url("/models"), method="GET",
+        headers={"Origin": _CORS_REQUEST_ORIGIN})
+    status, headers = _cors_send(actual)
+    act = _cors_classify(headers)
+    act["status"] = status
+    act["headers"] = _cors_wildcard(headers)
+    act["pass"] = bool(status is not None and act["allow_origin"] is not None)
+
+    return {"preflight": pre, "actual_response": act}
+
+
+def cors_test_round() -> dict:
+    """Probe the endpoint's CORS policy for browser-direct integration."""
+    section("CORS test -- browser-direct integration")
+    print("\nReplays the CORS preflight a browser sends before a cross-origin")
+    print("POST /chat/completions (Authorization + application/json), then a")
+    print("plain Origin-tagged GET /models. No credentials are sent.\n")
+
+    if not ENDPOINT.startswith(("http://", "https://")):
+        print("[cors] skipped: a local --script wrapper is not an HTTP endpoint")
+        return {"error": "CORS does not apply: the probe target is a local script "
+                         "wrapper, not an HTTP endpoint"}
+
+    result = _cors_merge(_cors_run())
+    for label, part in (("preflight", result["preflight"]),
+                        ("actual response", result["actual_response"])):
+        origin = part["allow_origin"]
+        verdict = "no access-control-allow-origin" if origin is None else repr(origin)
+        print(f"[cors] {label}: HTTP {part['status']}, {verdict} -> "
+              f"{'PASS' if part['pass'] else 'FAIL'}")
+    print("\nCORS summary: "
+          + _cors_summary_line(result))
+    return result
+
+
+def _cors_origin_cell(cors_test: dict) -> str:
+    """The `CORS` capabilities-table cell: wildcard, origin, or none."""
+    origin = cors_test.get("allow_origin")
+    if origin is None:
+        return "no access-control-allow-origin"
+    if "*" in origin:
+        return "`*` (any origin)"
+    return f"reflected origin `{origin}`"
+
+
+def _cors_summary_line(cors_test: dict) -> str:
+    """One-line verdict for the console and the report intro."""
+    mode = cors_test.get("mode")
+    if mode == "wildcard":
+        return "wildcard access-control-allow-origin: * -- any web page can call this endpoint"
+    if mode == "reflected":
+        return (f"access-control-allow-origin echoes the request origin "
+                f"({cors_test.get('allow_credentials') and 'with' or 'without'} "
+                f"credentials) -- browser-direct works, no wildcard")
+    if mode == "none":
+        return "no access-control-allow-origin on any CORS probe -- a browser cannot read responses from this endpoint"
+    return "no verdict"
+
+
+def _cors_reduce(cors: dict) -> dict:
+    """Collapse the two probe legs into the summary fields the report shows."""
+    pre = cors.get("preflight") or {}
+    act = cors.get("actual_response") or {}
+    origins = [o for o in (pre.get("allow_origin"), act.get("allow_origin")) if o]
+    wildcard = any("*" in o for o in origins)
+    if wildcard:
+        mode = "wildcard"
+        allow_origin = "*"
+    elif origins:
+        mode = "reflected"
+        allow_origin = origins[0]
+    else:
+        mode = "none"
+        allow_origin = None
+    evidence = (f"OPTIONS {ENDPOINT.rstrip('/')}/chat/completions -> "
+                f"access-control-allow-origin: {pre.get('allow_origin') or '(none)'}; "
+                f"GET /models -> access-control-allow-origin: "
+                f"{act.get('allow_origin') or '(none)'}")
+    return {
+        "mode":                mode,
+        "allow_origin":        allow_origin,
+        "allow_credentials":   (pre.get("allow_credentials")
+                                or act.get("allow_credentials") or None),
+        "preflight_passed":    bool(pre.get("pass")),
+        "actual_response_passed": bool(act.get("pass")),
+        "evidence":            evidence,
+    }
+
+
+def _cors_merge(cors_test: dict) -> dict:
+    """Return the stored dict with its summary fields filled in (idempotent).
+
+    An empty dict (key present but the round never stored anything) or an
+    error-only dict is returned untouched, so the report can still tell
+    "not run" and "does not apply" apart from a measured result.
+    """
+    if not cors_test or "error" in cors_test:
+        return cors_test
+    merged = dict(cors_test)
+    merged.update(_cors_reduce(merged))
+    return merged
+
+
 # -- markdown report -----------------------------------------------------------
 
 def _md_escape(text: str) -> str:
@@ -2719,6 +2935,7 @@ def render_markdown_report(output: dict) -> str:
     endpoint = output.get("endpoint", "?")
     status   = output.get("status", "?")
     commit   = output.get("llmprobe_commit")
+    cors_test = _cors_merge(output.get("cors_test") or {})
 
     lines.append(f"# Model capability probe: {model}")
     lines.append("")
@@ -2733,6 +2950,14 @@ def render_markdown_report(output: dict) -> str:
     lines.append(f"- **Endpoint:** {endpoint}")
     lines.append(f"- **API type:** {output.get('api_type', 'OpenAI Completions')}")
     lines.append(f"- **Context window:** {_md_context_window(output)}")
+    if _capability_absent(output, "cors_test"):
+        lines.append(f"- **CORS:** *({_NO_DATA_NOTE})*")
+    elif cors_test and "error" not in cors_test:
+        lines.append(f"- **CORS:** {_cors_origin_cell(cors_test)}")
+    elif cors_test and cors_test.get("error"):
+        lines.append(f"- **CORS:** *({_md_escape(cors_test['error'])})*")
+    else:
+        lines.append("- **CORS:** *(not run — rerun without `--no-cors-test`)*")
     if status != "ok":
         lines.append(f"- **Status:** {status}")
     if output.get("error"):
@@ -2850,6 +3075,14 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"| `TSEL` | {tsel_passed}/{tsel_total} |")
     else:
         lines.append("| `TSEL` | *(not run)* |")
+    if _capability_absent(output, "cors_test"):
+        lines.append(f"| `CORS` | *({_NO_DATA_NOTE})* |")
+    elif cors_test and "error" not in cors_test:
+        lines.append(f"| `CORS` | {_cors_origin_cell(cors_test)} |")
+    elif cors_test and cors_test.get("error"):
+        lines.append(f"| `CORS` | *(error: {_md_escape(cors_test['error'])})* |")
+    else:
+        lines.append("| `CORS` | *(not run — rerun without `--no-cors-test`)* |")
     lines.append("")
 
     ctx = output.get("context_window")
@@ -2882,6 +3115,57 @@ def render_markdown_report(output: dict) -> str:
         if also:
             shown = ", ".join(f"{k}={v:,}" for k, v in also.items())
             lines.append(f"| Also advertised by the endpoint | {_md_escape(shown)} |")
+        lines.append("")
+
+    if _capability_absent(output, "cors_test"):
+        _append_no_data_section(lines, "## CORS preflight test (`CORS`)")
+    elif cors_test and "error" not in cors_test:
+        lines.append("## CORS preflight test (`CORS`)")
+        lines.append("")
+        lines.append(_cors_summary_line(cors_test) + ".")
+        lines.append("")
+        lines.append("A browser must clear a CORS preflight before any cross-origin")
+        lines.append("POST that carries `Authorization` and `Content-Type: application/json`,")
+        lines.append("so the probe replays that exact handshake (OPTIONS with `Origin` and")
+        lines.append("`Access-Control-Request-*`), then a plain Origin-tagged GET, and")
+        lines.append("records the `access-control-*` answer verbatim. No credentials are")
+        lines.append("sent for any of this.")
+        lines.append("")
+        lines.append("| Field | Value |")
+        lines.append("|---|---|")
+        lines.append(f"| Allow-origin | {_cors_origin_cell(cors_test)} |")
+        lines.append(f"| Preflight | {'PASS' if cors_test.get('preflight_passed') else 'FAIL'} — "
+                     f"allow-origin present, POST allowed, authorization + content-type headers allowed |")
+        lines.append(f"| Actual response | {'PASS' if cors_test.get('actual_response_passed') else 'FAIL'} — "
+                     f"CORS headers also present on a plain Origin-tagged GET |")
+        lines.append(f"| Allow-credentials | "
+                     f"{'yes' if cors_test.get('allow_credentials') else '—'} |")
+        lines.append(f"| Evidence | {_md_escape(cors_test.get('evidence') or '')} |")
+        lines.append("")
+        legs = (("preflight (OPTIONS /chat/completions)", cors_test.get("preflight")),
+                ("actual response (GET /models)", cors_test.get("actual_response")))
+        lines.append("| Probe | Status | Allow-origin | Allow-methods | Allow-headers | Result |")
+        lines.append("|---|---|---|---|---|---|")
+        for label, leg in legs:
+            if not isinstance(leg, dict):
+                continue
+            methods = leg.get("allow_methods")
+            headers_ = leg.get("allow_headers")
+            origin_ = leg.get("allow_origin")
+
+            def truncate(value: str) -> str:
+                return value if len(value) <= 80 else value[:77] + "..."
+
+            lines.append(f"| {label} | {leg.get('status') or '*(transport error)*'} | "
+                         f"{f'`{_md_escape(truncate(origin_))}`' if origin_ else '—'} | "
+                         f"{f'`{_md_escape(truncate(methods))}`' if methods else '—'} | "
+                         f"{f'`{_md_escape(truncate(headers_))}`' if headers_ else '—'} | "
+                         f"{'PASS' if leg.get('pass') else 'FAIL'} |")
+        lines.append("")
+    elif cors_test and cors_test.get("error"):
+        lines.append("## CORS preflight test (`CORS`)")
+        lines.append("")
+        lines.append(f"Error: {cors_test['error']}")
         lines.append("")
 
     lines.append("## Format detection & call delivery (`TCALL`)")
@@ -3366,6 +3650,17 @@ def _find_missing_capabilities(output: dict) -> list[str]:
         problems.append("Context window: no limit recovered for this endpoint; "
                         "record one with --context-tokens.")
 
+    cors_test = _cors_merge(output.get("cors_test") or {})
+    if _capability_absent(output, "cors_test"):
+        problems.append(f"`CORS`: {_NO_DATA_NOTE}.")
+    elif cors_test is None or not cors_test:
+        problems.append("`CORS` capability not tested (rerun without --no-cors-test).")
+    elif cors_test.get("error"):
+        pass  # recorded verbatim in the report; e.g. a local script target
+    elif cors_test.get("mode") == "none":
+        problems.append("`CORS`: no access-control-allow-origin on any probe -- a "
+                        "browser cannot integrate with this endpoint directly.")
+
     fmt = output.get("format_detection") or {}
     if fmt.get("error"):
         problems.append(f"`TCALL` format detection (round 0) failed: {fmt['error']}")
@@ -3569,6 +3864,23 @@ def main():
         print(f"\nReport written to {out_path} and {md_path}")
         return
 
+    if args.cors_only:
+        if not Path(out_path).exists():
+            sys.exit(f"Cannot run --cors-only: {out_path} does not exist. "
+                     "Run the full probe first.")
+        with open(out_path) as f:
+            output = json.load(f)
+        print(f"Target: {ENDPOINT}")
+        print(f"Model:  {MODEL}")
+        output["cors_test"] = cors_test_round()
+        md_path = _capabilities_md_path(out_path)
+        with open(out_path, "w") as f:
+            json.dump(output, f, indent=2)
+        with open(md_path, "w") as f:
+            f.write(render_markdown_report(output))
+        print(f"\nReport written to {out_path} and {md_path}")
+        return
+
     if args.cache_ttl_only:
         if not Path(out_path).exists():
             sys.exit(f"Cannot run --cache-ttl-only: {out_path} does not exist. "
@@ -3620,6 +3932,7 @@ def main():
         "agentknit_test":       None,
         "cache_ttl_test":       None,
         "context_window":       None,
+        "cors_test":            None,
     }
 
     md_path = _capabilities_md_path(out_path)
@@ -3847,6 +4160,17 @@ def main():
             else:
                 output["context_window"] = {"error": str(e)}
                 print(f"\nERROR in CTX test round: {e}")
+
+    if args.cors_test:
+        try:
+            output["cors_test"] = cors_test_round()
+        except Exception as e:
+            if _keep_previous_result(e, previous, "cors_test"):
+                output["cors_test"] = previous["cors_test"]
+                print(f"\nERROR in CORS test round (429): {e} -- keeping previous run's result")
+            else:
+                output["cors_test"] = {"error": str(e)}
+                print(f"\nERROR in CORS test round: {e}")
 
     save()
 

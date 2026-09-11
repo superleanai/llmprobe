@@ -667,5 +667,33 @@
     "source": "api_metadata",
     "evidence": "https://api.kimi.com/coding/v1/models -> k3-256k: context_length=262144",
     "metadata": {}
+  },
+  "cors_test": {
+    "preflight": {
+      "allow_origin": null,
+      "allow_methods": null,
+      "allow_headers": null,
+      "allow_credentials": null,
+      "expose_headers": null,
+      "status": 404,
+      "headers": {},
+      "pass": false
+    },
+    "actual_response": {
+      "allow_origin": null,
+      "allow_methods": null,
+      "allow_headers": null,
+      "allow_credentials": null,
+      "expose_headers": null,
+      "status": 401,
+      "headers": {},
+      "pass": false
+    },
+    "mode": "none",
+    "allow_origin": null,
+    "allow_credentials": null,
+    "preflight_passed": false,
+    "actual_response_passed": false,
+    "evidence": "OPTIONS https://api.kimi.com/coding/v1/chat/completions -> access-control-allow-origin: None; GET /models -> access-control-allow-origin: None"
   }
 }

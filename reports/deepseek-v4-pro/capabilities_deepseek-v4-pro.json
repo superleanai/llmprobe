@@ -699,5 +699,43 @@
     "source": "api_error_message",
     "evidence": "maximum context length is 1048576",
     "probed_prompt_tokens": 1200000
+  },
+  "cors_test": {
+    "preflight": {
+      "allow_origin": "https://llmprobe.example",
+      "allow_methods": "POST",
+      "allow_headers": "authorization, content-type",
+      "allow_credentials": true,
+      "expose_headers": null,
+      "status": 200,
+      "headers": {
+        "access-control-allow-origin": "https://llmprobe.example",
+        "access-control-allow-methods": "POST",
+        "access-control-allow-headers": "authorization, content-type",
+        "access-control-allow-credentials": "true",
+        "vary": "origin, access-control-request-method, access-control-request-headers"
+      },
+      "pass": true
+    },
+    "actual_response": {
+      "allow_origin": "https://llmprobe.example",
+      "allow_methods": null,
+      "allow_headers": null,
+      "allow_credentials": true,
+      "expose_headers": null,
+      "status": 401,
+      "headers": {
+        "access-control-allow-origin": "https://llmprobe.example",
+        "access-control-allow-credentials": "true",
+        "vary": "origin, access-control-request-method, access-control-request-headers"
+      },
+      "pass": true
+    },
+    "mode": "reflected",
+    "allow_origin": "https://llmprobe.example",
+    "allow_credentials": true,
+    "preflight_passed": true,
+    "actual_response_passed": true,
+    "evidence": "OPTIONS https://api.deepseek.com/v1/chat/completions -> access-control-allow-origin: https://llmprobe.example; GET /models -> access-control-allow-origin: https://llmprobe.example"
   }
 }

@@ -639,5 +639,8 @@
     "kind": "max_prompt_tokens",
     "source": "api_error_message",
     "evidence": "prompt token count of 300008 exceeds the limit of 128000 (Copilot /chat/completions; the local wrapper script swallows the API error body)"
+  },
+  "cors_test": {
+    "error": "CORS does not apply: the probe target is a local script wrapper, not an HTTP endpoint"
   }
 }

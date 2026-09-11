@@ -726,5 +726,43 @@
     "source": "api_metadata",
     "evidence": "https://openrouter.ai/api/v1/models -> deepseek/deepseek-v4.1-flash: context_length=1048576",
     "metadata": {}
+  },
+  "cors_test": {
+    "preflight": {
+      "allow_origin": "*",
+      "allow_methods": "GET,OPTIONS,PATCH,DELETE,POST,PUT",
+      "allow_headers": "Authorization,User-Agent,X-Api-Key,X-CSRF-Token,X-Requested-With,Accept,Accept-Version,Content-Length,Content-MD5,Content-Type,Date,X-Api-Version,HTTP-Referer,X-Windowai-Title,X-Openrouter-Title,X-Title,X-Openrouter-Categories,X-Openrouter-App-Visibility,X-Session-Id,X-Stainless-Lang,X-Stainless-Package-Version,X-Stainless-OS,X-Stainless-Arch,X-Stainless-Runtime,X-Stainless-Runtime-Version,X-Stainless-Retry-Count,X-Stainless-Timeout,X-Stainless-Helper-Method,Protection-Key,traceparent,tracestate,b3",
+      "allow_credentials": null,
+      "expose_headers": "X-Generation-Id,X-Provider-Name,request-id,cf-ray",
+      "status": 204,
+      "headers": {
+        "access-control-allow-origin": "*",
+        "access-control-allow-methods": "GET,OPTIONS,PATCH,DELETE,POST,PUT",
+        "access-control-allow-headers": "Authorization,User-Agent,X-Api-Key,X-CSRF-Token,X-Requested-With,Accept,Accept-Version,Content-Length,Content-MD5,Content-Type,Date,X-Api-Version,HTTP-Referer,X-Windowai-Title,X-Openrouter-Title,X-Title,X-Openrouter-Categories,X-Openrouter-App-Visibility,X-Session-Id,X-Stainless-Lang,X-Stainless-Package-Version,X-Stainless-OS,X-Stainless-Arch,X-Stainless-Runtime,X-Stainless-Runtime-Version,X-Stainless-Retry-Count,X-Stainless-Timeout,X-Stainless-Helper-Method,Protection-Key,traceparent,tracestate,b3",
+        "access-control-expose-headers": "X-Generation-Id,X-Provider-Name,request-id,cf-ray",
+        "vary": "Access-Control-Request-Headers"
+      },
+      "pass": true
+    },
+    "actual_response": {
+      "allow_origin": "*",
+      "allow_methods": null,
+      "allow_headers": null,
+      "allow_credentials": null,
+      "expose_headers": "X-Generation-Id,X-Provider-Name,request-id,cf-ray",
+      "status": 200,
+      "headers": {
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "X-Generation-Id,X-Provider-Name,request-id,cf-ray",
+        "vary": "Host"
+      },
+      "pass": true
+    },
+    "mode": "wildcard",
+    "allow_origin": "*",
+    "allow_credentials": null,
+    "preflight_passed": true,
+    "actual_response_passed": true,
+    "evidence": "OPTIONS https://openrouter.ai/api/v1/chat/completions -> access-control-allow-origin: *; GET /models -> access-control-allow-origin: *"
   }
 }

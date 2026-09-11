@@ -21,6 +21,7 @@ so different models and endpoints can be compared side by side.
 | `REASN` | Reasoning tokens exposed, and whether reasoning-effort syntax is accepted |
 | `TSEL` | Model calls the right tool in a list |
 | `AKDEF` | Model uses agentknit's real default tools (`read_file`/`write_file`/`str_replace`/`exec_shell`) correctly end to end |
+| `CORS` | Endpoint answers a browser CORS preflight for cross-origin POSTs (wildcard, reflected origin, or none) |
 | Context window | Model's context-window size, recovered from `/models` metadata or the endpoint's own rejection message |
 
 Full definitions, units, and ranges: [CAPABILITIES.md](CAPABILITIES.md).
@@ -66,6 +67,10 @@ other capability still runs. Skip it explicitly with `--no-agentknit-test`.
 `CACH` (empirical prompt-cache TTL measurement) is the one test that is
 off by default — it takes several minutes of real waiting. Enable it with
 `--cache-ttl-test`.
+
+`CORS` needs no credentials at all (it is a property of the endpoint's HTTP
+layer, and its requests carry no `Authorization`), so an existing report can
+be refreshed any time with `--cors-only --endpoint <base-url>`.
 
 Run `python3 probe_inference.py --help` for every flag.
 
