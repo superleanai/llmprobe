@@ -512,11 +512,11 @@
       },
       "pass": true
     },
-    "mode": "reflected",
-    "allow_origin": "https://llmprobe.example",
+    "mode": "blocked",
+    "allow_origin": null,
     "allow_credentials": true,
     "preflight_passed": false,
     "actual_response_passed": true,
-    "evidence": "OPTIONS https://api.z.ai/api/coding/paas/v4/chat/completions -> access-control-allow-origin: None; GET /models -> access-control-allow-origin: https://llmprobe.example"
+    "evidence": "OPTIONS https://api.z.ai/api/coding/paas/v4/chat/completions -> access-control-allow-origin: (none); GET /models -> access-control-allow-origin: https://llmprobe.example"
   }
 }

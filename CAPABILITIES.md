@@ -323,10 +323,12 @@ integrate with it directly. Reported as `cors_test` in the JSON plus a
 `CORS` row in the capabilities table and a `## CORS preflight test` section
 in the Markdown report.
 
-- **Unit:** the `access-control-allow-origin` answer, verbatim
-- **Range:** `*` (wildcard — any origin), the reflected request origin
-  (browser-direct works, with or without `access-control-allow-credentials`),
-  or no header at all (a browser cannot read responses from this endpoint)
+- **Unit:** the browser-direct CORS verdict, with each leg's
+  `access-control-allow-origin` answer recorded verbatim
+- **Range:** `*` (wildcard — any origin) or the reflected request origin
+  only when both legs pass; `blocked` when either leg prevents a browser
+  request; or no header at all (a browser cannot read responses from this
+  endpoint)
 - **Source:** `cors_test` (enabled by default; disable with `--no-cors-test`;
   refresh an existing report with `--cors-only`)
 
@@ -338,5 +340,6 @@ the preflight yet strip the CORS headers from the actual response, which
 breaks the call one request later. `preflight_passed` additionally requires
 `access-control-allow-methods` to cover POST and `access-control-allow-headers`
 to cover both `authorization` and `content-type`; a preflight missing those
-fails in the browser exactly like a missing origin does. The two requests
-carry no Authorization, so this round needs no credentials.
+fails in the browser exactly like a missing origin does. A successful actual
+response alone does not make an endpoint browser-direct: both legs must pass.
+The two requests carry no Authorization, so this round needs no credentials.

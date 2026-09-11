@@ -2734,6 +2734,11 @@ def _cors_classify(headers) -> dict:
     }
 
 
+def _cors_allows_probe_origin(origin: str | None) -> bool:
+    """Whether an ACAO value permits the probe page's origin."""
+    return origin in {"*", _CORS_REQUEST_ORIGIN}
+
+
 def _cors_wildcard(headers) -> dict:
     """Detail rows for the report: which headers were set and to what."""
     interesting = (
@@ -2762,7 +2767,7 @@ def _cors_run() -> dict:
     pre["headers"] = _cors_wildcard(headers)
     pre["pass"] = bool(
         status is not None
-        and pre["allow_origin"] is not None
+        and _cors_allows_probe_origin(pre["allow_origin"])
         and "POST" in pre["allow_methods"].upper()
         and all(h in pre["allow_headers"].lower()
                 for h in ("authorization", "content-type")))
@@ -2774,7 +2779,7 @@ def _cors_run() -> dict:
     act = _cors_classify(headers)
     act["status"] = status
     act["headers"] = _cors_wildcard(headers)
-    act["pass"] = bool(status is not None and act["allow_origin"] is not None)
+    act["pass"] = bool(status is not None and _cors_allows_probe_origin(act["allow_origin"]))
 
     return {"preflight": pre, "actual_response": act}
 
@@ -2804,7 +2809,9 @@ def cors_test_round() -> dict:
 
 
 def _cors_origin_cell(cors_test: dict) -> str:
-    """The `CORS` capabilities-table cell: wildcard, origin, or none."""
+    """The `CORS` capabilities-table cell: direct verdict plus observed origin."""
+    if cors_test.get("mode") == "blocked":
+        return "preflight or response blocks browser-direct access"
     origin = cors_test.get("allow_origin")
     if origin is None:
         return "no access-control-allow-origin"
@@ -2822,6 +2829,8 @@ def _cors_summary_line(cors_test: dict) -> str:
         return (f"access-control-allow-origin echoes the request origin "
                 f"({cors_test.get('allow_credentials') and 'with' or 'without'} "
                 f"credentials) -- browser-direct works, no wildcard")
+    if mode == "blocked":
+        return "CORS headers were observed, but preflight or the actual response blocks browser-direct access"
     if mode == "none":
         return "no access-control-allow-origin on any CORS probe -- a browser cannot read responses from this endpoint"
     return "no verdict"
@@ -2831,14 +2840,19 @@ def _cors_reduce(cors: dict) -> dict:
     """Collapse the two probe legs into the summary fields the report shows."""
     pre = cors.get("preflight") or {}
     act = cors.get("actual_response") or {}
-    origins = [o for o in (pre.get("allow_origin"), act.get("allow_origin")) if o]
-    wildcard = any("*" in o for o in origins)
-    if wildcard:
-        mode = "wildcard"
-        allow_origin = "*"
-    elif origins:
-        mode = "reflected"
-        allow_origin = origins[0]
+    preflight_passed = bool(pre.get("pass"))
+    actual_response_passed = bool(act.get("pass"))
+    if preflight_passed and actual_response_passed:
+        if pre.get("allow_origin") == "*" and act.get("allow_origin") == "*":
+            mode = "wildcard"
+            allow_origin = "*"
+        else:
+            mode = "reflected"
+            allow_origin = (pre.get("allow_origin") if pre.get("allow_origin") != "*"
+                            else act.get("allow_origin"))
+    elif pre.get("allow_origin") or act.get("allow_origin"):
+        mode = "blocked"
+        allow_origin = None
     else:
         mode = "none"
         allow_origin = None
@@ -2851,8 +2865,8 @@ def _cors_reduce(cors: dict) -> dict:
         "allow_origin":        allow_origin,
         "allow_credentials":   (pre.get("allow_credentials")
                                 or act.get("allow_credentials") or None),
-        "preflight_passed":    bool(pre.get("pass")),
-        "actual_response_passed": bool(act.get("pass")),
+        "preflight_passed":    preflight_passed,
+        "actual_response_passed": actual_response_passed,
         "evidence":            evidence,
     }
 
@@ -3660,6 +3674,8 @@ def _find_missing_capabilities(output: dict) -> list[str]:
     elif cors_test.get("mode") == "none":
         problems.append("`CORS`: no access-control-allow-origin on any probe -- a "
                         "browser cannot integrate with this endpoint directly.")
+    elif cors_test.get("mode") == "blocked":
+        problems.append("`CORS`: preflight or actual response rejects browser-direct access.")
 
     fmt = output.get("format_detection") or {}
     if fmt.get("error"):

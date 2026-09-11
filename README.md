@@ -21,7 +21,7 @@ so different models and endpoints can be compared side by side.
 | `REASN` | Reasoning tokens exposed, and whether reasoning-effort syntax is accepted |
 | `TSEL` | Model calls the right tool in a list |
 | `AKDEF` | Model uses agentknit's real default tools (`read_file`/`write_file`/`str_replace`/`exec_shell`) correctly end to end |
-| `CORS` | Endpoint answers a browser CORS preflight for cross-origin POSTs (wildcard, reflected origin, or none) |
+| `CORS` | Endpoint clears both browser CORS legs for cross-origin POSTs (wildcard, reflected origin, blocked, or none) |
 | Context window | Model's context-window size, recovered from `/models` metadata or the endpoint's own rejection message |
 
 Full definitions, units, and ranges: [CAPABILITIES.md](CAPABILITIES.md).

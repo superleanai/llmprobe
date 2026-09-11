@@ -79,7 +79,32 @@ def test_preflight_fails_when_authorization_header_not_allowed(monkeypatch):
     assert result["preflight"]["pass"] is False
 
 
-def test_reduce_detects_wildcard_from_any_leg():
+def test_preflight_fails_when_allow_origin_does_not_match_probe(monkeypatch):
+    monkeypatch.setattr(pi, "_cors_send",
+                        lambda req: (200, _preflight_headers(origin="https://other.example")))
+    pi.ENDPOINT = "https://api.example.com/v1"
+
+    result = pi._cors_run()
+
+    assert result["preflight"]["pass"] is False
+
+
+def test_actual_response_fails_when_allow_origin_does_not_match_probe(monkeypatch):
+    def fake_send(req):
+        if req.get_method() == "OPTIONS":
+            return 200, _preflight_headers()
+        return 200, _Headers({"Access-Control-Allow-Origin": "https://other.example"})
+
+    monkeypatch.setattr(pi, "_cors_send", fake_send)
+    pi.ENDPOINT = "https://api.example.com/v1"
+
+    result = pi._cors_run()
+
+    assert result["preflight"]["pass"] is True
+    assert result["actual_response"]["pass"] is False
+
+
+def test_reduce_detects_wildcard_when_both_legs_pass():
     cors = {"preflight": {"allow_origin": "*", "pass": True},
             "actual_response": {"allow_origin": "*", "pass": True}}
 
@@ -111,6 +136,18 @@ def test_reduce_reports_none_when_no_origin_anywhere():
     assert reduced["allow_origin"] is None
 
 
+def test_reduce_reports_blocked_when_only_actual_response_has_cors():
+    cors = {"preflight": {"allow_origin": None, "pass": False},
+            "actual_response": {"allow_origin": "https://llmprobe.example", "pass": True}}
+
+    reduced = pi._cors_reduce(cors)
+
+    assert reduced["mode"] == "blocked"
+    assert reduced["allow_origin"] is None
+    assert reduced["preflight_passed"] is False
+    assert reduced["actual_response_passed"] is True
+
+
 def test_report_header_and_section_show_wildcard():
     report = pi.render_markdown_report({
         "model": "m",
@@ -126,6 +163,20 @@ def test_report_header_and_section_show_wildcard():
     assert "| `CORS` | `*` (any origin) |" in report
     assert "## CORS preflight test (`CORS`)" in report
     assert "any web page can call this endpoint" in report
+
+
+def test_report_says_browser_direct_is_blocked_when_preflight_fails():
+    report = pi.render_markdown_report({
+        "model": "m",
+        "cors_test": {"preflight": {"allow_origin": None, "status": 200, "pass": False},
+                      "actual_response": {"allow_origin": "https://llmprobe.example",
+                                          "status": 401, "pass": True}},
+    })
+
+    assert "- **CORS:** preflight or response blocks browser-direct access" in report
+    assert "preflight or the actual response blocks browser-direct access" in report
+    assert "browser-direct works" not in report
+    assert "`CORS`: preflight or actual response rejects browser-direct access." in report
 
 
 def test_report_says_no_data_when_cors_key_absent():
