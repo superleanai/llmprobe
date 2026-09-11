@@ -27,7 +27,7 @@ See `CAPABILITIES.md` for what each codename measures, its unit, and its range.
 ## Format detection & call delivery (`TCALL`)
 
 - Round-0 probe (single call): detected format `structured_tool_calls`, structured tool_calls used: True
-- Explicit XML tool-call task (`<tool_call>` read_file envelope): *(not run — rerun the probe with this version)*
+- Explicit XML tool-call task (`<tool_call>` read_file envelope): *(no data, please rerun the probing)*
 
 - Full probe (8 tasks): call delivery mode `structured_tool_calls`
   - Structured tool_calls: 8/8 tasks
@@ -246,17 +246,17 @@ Each task is run with the full inferred tool schema. PASS means the model called
 
 ## Prompt-cache TTL measurement (`CACH`)
 
-Empirical prompt-cache TTL: the probe primes the cache with a large fixed prefix, then re-sends the exact same prefix after increasing delays, stopping at the first cold (cache-miss) sample. WARM means the provider reported most prompt tokens as cached; COLD means the cache entry had expired. A TTL has no right or wrong value — this section is informational, not pass/fail.
+Empirical prompt-cache TTL: the probe primes the cache with a large fixed prefix, then re-sends the exact same prefix after increasing delays, stopping at the first cold (cache-miss) sample. WARM means the provider reported most prompt tokens as cached; COLD means the cache entry had expired. An immediate (0-delay) re-send first proves the prefix is cacheable at all, and on load-balanced endpoints (OpenRouter) the upstream that answered the prime call is pinned for every re-send, since a different upstream has a different cache. A TTL has no right or wrong value — this section is informational, not pass/fail.
 
 - **Measured TTL: > 600s** (still warm at the longest probed delay)
 
-| Sample | Prompt tokens | Cached tokens | Latency (s) | Verdict |
-|---|---|---|---|---|
-| prime | 2262 | 0 | 1.414 | prime |
-| delay_30s | 2265 | 2048 | 1.289 | WARM |
-| delay_120s | 2265 | 2048 | 1.147 | WARM |
-| delay_300s | 2265 | 2048 | 1.029 | WARM |
-| delay_600s | 2265 | 2048 | 1.1 | WARM |
+| Sample | Prompt tokens | Cached tokens | Latency (s) | Provider | Verdict |
+|---|---|---|---|---|---|
+| prime | 2262 | 0 | 1.414 | — | prime |
+| delay_30s | 2265 | 2048 | 1.289 | — | WARM |
+| delay_120s | 2265 | 2048 | 1.147 | — | WARM |
+| delay_300s | 2265 | 2048 | 1.029 | — | WARM |
+| delay_600s | 2265 | 2048 | 1.1 | — | WARM |
 
 ## Missing capabilities
 

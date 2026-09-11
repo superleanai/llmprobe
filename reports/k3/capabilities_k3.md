@@ -141,17 +141,17 @@ Each task is run with the full inferred tool schema. PASS means the model called
 
 ## Prompt-cache TTL measurement (`CACH`)
 
-Empirical prompt-cache TTL: the probe primes the cache with a large fixed prefix, then re-sends the exact same prefix after increasing delays, stopping at the first cold (cache-miss) sample. WARM means the provider reported most prompt tokens as cached; COLD means the cache entry had expired. A TTL has no right or wrong value — this section is informational, not pass/fail.
+Empirical prompt-cache TTL: the probe primes the cache with a large fixed prefix, then re-sends the exact same prefix after increasing delays, stopping at the first cold (cache-miss) sample. WARM means the provider reported most prompt tokens as cached; COLD means the cache entry had expired. An immediate (0-delay) re-send first proves the prefix is cacheable at all, and on load-balanced endpoints (OpenRouter) the upstream that answered the prime call is pinned for every re-send, since a different upstream has a different cache. A TTL has no right or wrong value — this section is informational, not pass/fail.
 
 - **Measured TTL: > 600s** (still warm at the longest probed delay)
 
-| Sample | Prompt tokens | Cached tokens | Latency (s) | Verdict |
-|---|---|---|---|---|
-| prime | 2268 | 2268 | 3.695 | prime |
-| delay_30s | 2271 | 2271 | 3.927 | WARM |
-| delay_120s | 2271 | 2271 | 6.071 | WARM |
-| delay_300s | 2271 | 2271 | 4.597 | WARM |
-| delay_600s | 2271 | 2271 | 4.962 | WARM |
+| Sample | Prompt tokens | Cached tokens | Latency (s) | Provider | Verdict |
+|---|---|---|---|---|---|
+| prime | 2268 | 2268 | 3.695 | — | prime |
+| delay_30s | 2271 | 2271 | 3.927 | — | WARM |
+| delay_120s | 2271 | 2271 | 6.071 | — | WARM |
+| delay_300s | 2271 | 2271 | 4.597 | — | WARM |
+| delay_600s | 2271 | 2271 | 4.962 | — | WARM |
 
 ## Missing capabilities
 
