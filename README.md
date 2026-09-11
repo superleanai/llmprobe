@@ -14,7 +14,7 @@ so different models and endpoints can be compared side by side.
 | `QUOTE` | Literal double-quotes preserved inside JSON string args |
 | `GREP` | Prefers filtered/targeted calls over pulling whole files/outputs into context |
 | `ASKQ` | How strongly task phrasing drives use of an `ask_user_question` tool |
-| `GRAMK` | Model's own knowledge of OpenAI's `apply_patch` grammar (no tool schema) |
+| `APPLY_PATCH` | Model's own knowledge of OpenAI's `apply_patch` grammar (no tool schema) |
 | `GRAMT` | Endpoint's transport support for real grammar-constrained custom tools |
 | `RJSON` | Endpoint honours strict `response_format:{type:"json_schema"}` |
 | `STRM` | Endpoint delivers real incremental SSE chunks under `stream:true` |

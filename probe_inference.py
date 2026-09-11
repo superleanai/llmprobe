@@ -1516,7 +1516,7 @@ def ask_user_question_test_round(
     return {"askq_results": results, "askq_passed": passed, "askq_total": total}
 
 
-# -- apply_patch grammar-knowledge test (GRAMK) ------------------------
+# -- apply_patch grammar-knowledge test (APPLY_PATCH) ------------------
 #
 # Tests whether a model *naturally* knows OpenAI's apply_patch envelope
 # syntax (the format used by the real "custom"/freeform apply_patch tool --
@@ -1595,7 +1595,7 @@ def _strip_fences(text: str) -> str:
 
 
 def gram_knowledge_test_round(client: openai.OpenAI) -> dict:
-    section("GRAMK test -- does the model naturally know apply_patch grammar?")
+    section("APPLY_PATCH test -- does the model naturally know apply_patch grammar?")
     print("\nNo tool schema is offered -- the model is asked in free text to produce")
     print("ONLY a raw apply_patch-format patch, then it's parsed against the real")
     print("grammar (not a loose regex). PASS = syntactically valid patch.\n")
@@ -1624,14 +1624,14 @@ def gram_knowledge_test_round(client: openai.OpenAI) -> dict:
 
     passed = sum(1 for r in results.values() if r["pass"])
     total  = len(results)
-    print(f"\nGRAMK summary: {passed}/{total} passed")
+    print(f"\nAPPLY_PATCH summary: {passed}/{total} passed")
     return {"gram_knowledge_results": results, "gram_knowledge_passed": passed,
             "gram_knowledge_total": total}
 
 
 # -- constrained-decoding / custom-tool test (GRAMT) -------------------
 #
-# GRAMK tests whether the model *knows* the apply_patch grammar from
+# APPLY_PATCH tests whether the model *knows* the apply_patch grammar from
 # pretraining, with no tool schema at all. This tests something different:
 # whether the *endpoint* actually implements OpenAI's real freeform/custom-tool
 # transport (`type: "custom"`, `format: {type: "grammar", syntax: "lark", ...}`)
@@ -1643,7 +1643,7 @@ def gram_knowledge_test_round(client: openai.OpenAI) -> dict:
 # custom_tool_call once its wrapper script's translator is fixed to pass
 # `type: "custom"` tools through instead of silently dropping them).
 #
-# Sent verbatim as OpenAI/Codex define it -- unlike the GRAMK grammar
+# Sent verbatim as OpenAI/Codex define it -- unlike the APPLY_PATCH grammar
 # above, this is not rewritten for Python-lark's zero-width-terminal
 # restriction, since it's the *endpoint's* grammar engine that has to accept
 # it, not ours.
@@ -2430,9 +2430,9 @@ def render_markdown_report(output: dict) -> str:
     else:
         lines.append("| `ASKQ` | *(not run — rerun without `--no-askq-test`)* |")
     if gram_knowledge_test and "error" not in gram_knowledge_test:
-        lines.append(f"| `GRAMK` | {gram_knowledge_test.get('gram_knowledge_passed', 0)}/{gram_knowledge_test.get('gram_knowledge_total', 0)} |")
+        lines.append(f"| `APPLY_PATCH` | {gram_knowledge_test.get('gram_knowledge_passed', 0)}/{gram_knowledge_test.get('gram_knowledge_total', 0)} |")
     else:
-        lines.append("| `GRAMK` | *(not run — rerun without `--no-gram-knowledge-test`)* |")
+        lines.append("| `APPLY_PATCH` | *(not run — rerun without `--no-gram-knowledge-test`)* |")
     if gram_transport_test and "error" not in gram_transport_test:
         lines.append(f"| `GRAMT` | {gram_transport_test.get('gram_transport_passed', 0)}/{gram_transport_test.get('gram_transport_total', 0)} |")
     else:
@@ -2696,7 +2696,7 @@ def render_markdown_report(output: dict) -> str:
         results = gram_knowledge_test.get("gram_knowledge_results") or {}
         passed  = gram_knowledge_test.get("gram_knowledge_passed", 0)
         total   = gram_knowledge_test.get("gram_knowledge_total", 0)
-        lines.append("## apply_patch grammar-knowledge test (`GRAMK`)")
+        lines.append("## apply_patch grammar-knowledge test (`APPLY_PATCH`)")
         lines.append("")
         lines.append(f"**{passed}/{total} passed** — no tool schema offered; the model is asked "
                      "in free text to produce a raw apply_patch-format patch, parsed against the "
@@ -2712,7 +2712,7 @@ def render_markdown_report(output: dict) -> str:
             lines.append(f"| {op} | {result} | {note} |")
         lines.append("")
     elif gram_knowledge_test and gram_knowledge_test.get("error"):
-        lines.append("## apply_patch grammar-knowledge test (`GRAMK`)")
+        lines.append("## apply_patch grammar-knowledge test (`APPLY_PATCH`)")
         lines.append("")
         lines.append(f"Error: {gram_knowledge_test['error']}")
         lines.append("")
@@ -2728,7 +2728,7 @@ def render_markdown_report(output: dict) -> str:
                      "requires a genuine `custom` tool_call back with grammar-valid input "
                      "(not a classic `function` tool_call, and not silently ignored). Tests the "
                      "*endpoint's* transport support, independent of whether the model knows the "
-                     "syntax (`GRAMK`) — see `~/bin/copilot-notes.md`.")
+                     "syntax (`APPLY_PATCH`) — see `~/bin/copilot-notes.md`.")
         lines.append("")
         lines.append("| Operation | Result | Tool call type | Notes |")
         lines.append("|---|---|---|---|")
@@ -2982,13 +2982,13 @@ def _find_missing_capabilities(output: dict) -> list[str]:
 
     gram_knowledge_test = output.get("gram_knowledge_test")
     if gram_knowledge_test is None:
-        problems.append("`GRAMK` capability not tested (rerun without --no-gram-knowledge-test).")
+        problems.append("`APPLY_PATCH` capability not tested (rerun without --no-gram-knowledge-test).")
     elif gram_knowledge_test.get("error"):
-        problems.append(f"`GRAMK` test failed to run: {gram_knowledge_test['error']}")
+        problems.append(f"`APPLY_PATCH` test failed to run: {gram_knowledge_test['error']}")
     else:
         for op, r in (gram_knowledge_test.get("gram_knowledge_results") or {}).items():
             if not r.get("pass"):
-                problems.append(f"`GRAMK_{op}` FAILED — {r.get('error', 'unknown reason')}")
+                problems.append(f"`APPLY_PATCH_{op}` FAILED — {r.get('error', 'unknown reason')}")
 
     gram_transport_test = output.get("gram_transport_test")
     if gram_transport_test is None:
@@ -3271,10 +3271,10 @@ def main():
         except Exception as e:
             if _keep_previous_result(e, previous, "gram_knowledge_test"):
                 output["gram_knowledge_test"] = previous["gram_knowledge_test"]
-                print(f"\nERROR in GRAMK test round (429): {e} -- keeping previous run's result")
+                print(f"\nERROR in APPLY_PATCH test round (429): {e} -- keeping previous run's result")
             else:
                 output["gram_knowledge_test"] = {"error": str(e)}
-                print(f"\nERROR in GRAMK test round: {e}")
+                print(f"\nERROR in APPLY_PATCH test round: {e}")
 
     if args.gram_transport_test:
         try:

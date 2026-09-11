@@ -13,7 +13,7 @@ See `CAPABILITIES.md` for what each codename measures, its unit, and its range.
 | `QUOTE` | 3/3 |
 | `GREP` | 6/6 |
 | `ASKQ` | 4/8 (Sometimes) |
-| `GRAMK` | 2/2 |
+| `APPLY_PATCH` | 2/2 |
 | `GRAMT` | 1/1 |
 | `RJSON` | 1/1 |
 | `STRM` | 0/1 |
@@ -194,7 +194,7 @@ Each task is run with the full inferred tool schema. PASS means the model called
 | options_style | default | ASKED | `ask_user_question` |
 | system_nudge | nudge | ASKED | `ask_user_question` |
 
-## apply_patch grammar-knowledge test (`GRAMK`)
+## apply_patch grammar-knowledge test (`APPLY_PATCH`)
 
 **2/2 passed** — no tool schema offered; the model is asked in free text to produce a raw apply_patch-format patch, parsed against the real grammar (not a loose regex). Tests whether the model *knows* the syntax, independent of whether the endpoint exposes the tool itself (see `~/bin/copilot-notes.md`).
 
@@ -205,7 +205,7 @@ Each task is run with the full inferred tool schema. PASS means the model called
 
 ## Constrained-decoding / custom-tool test (`GRAMT`)
 
-**1/1 passed** — sends a real OpenAI `type:"custom"` freeform tool with `format:{type:"grammar", syntax:"lark"}`; PASS requires a genuine `custom` tool_call back with grammar-valid input (not a classic `function` tool_call, and not silently ignored). Tests the *endpoint's* transport support, independent of whether the model knows the syntax (`GRAMK`) — see `~/bin/copilot-notes.md`.
+**1/1 passed** — sends a real OpenAI `type:"custom"` freeform tool with `format:{type:"grammar", syntax:"lark"}`; PASS requires a genuine `custom` tool_call back with grammar-valid input (not a classic `function` tool_call, and not silently ignored). Tests the *endpoint's* transport support, independent of whether the model knows the syntax (`APPLY_PATCH`) — see `~/bin/copilot-notes.md`.
 
 | Operation | Result | Tool call type | Notes |
 |---|---|---|---|

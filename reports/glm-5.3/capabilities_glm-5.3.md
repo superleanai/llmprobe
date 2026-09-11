@@ -13,7 +13,7 @@ See `CAPABILITIES.md` for what each codename measures, its unit, and its range.
 | `QUOTE` | 2/3 |
 | `GREP` | 6/6 |
 | `ASKQ` | 5/8 (Sometimes) |
-| `GRAMK` | *(not run — rerun without `--no-gram-knowledge-test`)* |
+| `APPLY_PATCH` | *(not run — rerun without `--no-gram-knowledge-test`)* |
 | `GRAMT` | 0/1 |
 | `RJSON` | 0/1 |
 | `STRM` | *(not run — rerun without `--no-stream-test`)* |
@@ -170,7 +170,7 @@ Perform the 'glob' operation.
 
 ## Constrained-decoding / custom-tool test (`GRAMT`)
 
-**0/1 passed** — sends a real OpenAI `type:"custom"` freeform tool with `format:{type:"grammar", syntax:"lark"}`; PASS requires a genuine `custom` tool_call back with grammar-valid input (not a classic `function` tool_call, and not silently ignored). Tests the *endpoint's* transport support, independent of whether the model knows the syntax (`GRAMK`) — see `~/bin/copilot-notes.md`.
+**0/1 passed** — sends a real OpenAI `type:"custom"` freeform tool with `format:{type:"grammar", syntax:"lark"}`; PASS requires a genuine `custom` tool_call back with grammar-valid input (not a classic `function` tool_call, and not silently ignored). Tests the *endpoint's* transport support, independent of whether the model knows the syntax (`APPLY_PATCH`) — see `~/bin/copilot-notes.md`.
 
 | Operation | Result | Tool call type | Notes |
 |---|---|---|---|
@@ -191,7 +191,7 @@ Perform the 'glob' operation.
 - `ASKQ_first_person_unsure` FAILED — called `bash` instead of asking the user.
 - `ASKQ_ambiguous_no_ask_word` FAILED — called `bash` instead of asking the user.
 - `ASKQ_destructive_warning` FAILED — called `bash` instead of asking the user.
-- `GRAMK` capability not tested (rerun without --no-gram-knowledge-test).
+- `APPLY_PATCH` capability not tested (rerun without --no-gram-knowledge-test).
 - `GRAMT_apply_patch` FAILED — request failed: Error code: 400 - {'error': {'code': '1214', 'message': 'tools[0].type:type is illegal'}}
 - `RJSON_json_schema` FAILED — None
 - `STRM` capability not tested (rerun without --no-stream-test).

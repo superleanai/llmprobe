@@ -94,7 +94,7 @@ probe calls, not a separate probe round.
 - **Range:** 0 to 8 ops
 - **Source:** `tsel_test` (built from `probe_round()` results; no flag needed)
 
-## `GRAMK`
+## `APPLY_PATCH`
 
 **Capability:** Model naturally knows OpenAI's `apply_patch` envelope grammar
 from pretraining alone — no tool schema is offered, no
@@ -182,8 +182,8 @@ grammar (unmodified, as OpenAI/Codex define it) as a genuine custom tool;
 PASS requires a real `custom` tool_call back (not a `function` one, and not
 silently dropped/ignored) whose raw `input` text is grammar-valid.
 
-This is a transport/capability question distinct from `GRAMK`: a
-model can score `GRAMK` 2/2 (know the grammar cold) while its
+This is a transport/capability question distinct from `APPLY_PATCH`: a
+model can score `APPLY_PATCH` 2/2 (know the grammar cold) while its
 endpoint scores `GRAMT` 0/1 (can't accept the tool that would let
 it use that knowledge natively) — confirmed directly: `gpt-5-mini`'s
 Copilot endpoint 400s on this request shape entirely; `gpt-5.6-luna`'s
@@ -223,7 +223,7 @@ least half of its prompt tokens (and at least 500) come back cached.
   (`behaviour.structured_tool_calls` / `.inline_json_in_content` /
   `.no_call_detected`). The markdown report shows both under one `TCALL`
   heading.
-- `QUOTE`, `GREP`, `ASKQ`, `GRAMK`, `GRAMT`, `RJSON`, `STRM`, `REASN`, and
+- `QUOTE`, `GREP`, `ASKQ`, `APPLY_PATCH`, `GRAMT`, `RJSON`, `STRM`, `REASN`, and
   `AKDEF` are on by default (`--quote-test` / `--efficiency-test` /
   `--askq-test` / `--gram-knowledge-test` / `--gram-transport-test` /
   `--rjson-test` / `--stream-test` / `--reasoning-test` /

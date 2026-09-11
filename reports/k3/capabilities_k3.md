@@ -15,7 +15,7 @@ See `CAPABILITIES.md` for what each codename measures, its unit, and its range.
 | `QUOTE` | *(not run — rerun without `--no-quote-test`)* |
 | `GREP` | *(not run — rerun without `--no-efficiency-test`)* |
 | `ASKQ` | *(not run — rerun without `--no-askq-test`)* |
-| `GRAMK` | *(not run — rerun without `--no-gram-knowledge-test`)* |
+| `APPLY_PATCH` | *(not run — rerun without `--no-gram-knowledge-test`)* |
 | `GRAMT` | *(not run — rerun without `--no-gram-transport-test`)* |
 | `RJSON` | *(not run — rerun without `--no-rjson-test`)* |
 | `STRM` | *(not run — rerun without `--no-stream-test`)* |
@@ -159,7 +159,7 @@ Empirical prompt-cache TTL: the probe primes the cache with a large fixed prefix
 - `QUOTE` capability not tested (rerun without --no-quote-test).
 - `GREP` capability not tested (rerun without --no-efficiency-test).
 - `ASKQ` capability not tested (rerun without --no-askq-test).
-- `GRAMK` capability not tested (rerun without --no-gram-knowledge-test).
+- `APPLY_PATCH` capability not tested (rerun without --no-gram-knowledge-test).
 - `GRAMT` capability not tested (rerun without --no-gram-transport-test).
 - `RJSON` capability not tested (rerun without --no-rjson-test).
 - `STRM` capability not tested (rerun without --no-stream-test).
