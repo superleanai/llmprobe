@@ -59,6 +59,8 @@ API_TYPE_LABELS = {
 
 _PROBE_DIR: Path | None = None
 _KEY_NAME: str | None = None
+_PROVIDER: str | None = None
+_OBSERVED_PROVIDER: str | None = None
 # Upstream URL last reported by a `script:` wrapper (see _script_upstream).
 _SCRIPT_UPSTREAM: str | None = None
 
@@ -215,6 +217,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tdef-anthropic-model", default=None, dest="tdef_anthropic_model",
                    help="Model ID to send to the Anthropic Messages surface, for vendors "
                         "that map claude-* names onto their own models (default: --model).")
+    p.add_argument("--provider", default=None, dest="provider",
+                   help="Pin an aggregator's routing to one upstream provider, by its "
+                        "OpenRouter slug (e.g. 'deepinfra/fp8', 'fireworks'). The same "
+                        "model behind the same aggregator is served by different "
+                        "software with different configuration per provider, and the "
+                        "capabilities differ accordingly, so a pinned run is filed under "
+                        "reports/<server>/<model>/<provider>/ and fallbacks are "
+                        "disabled -- a request that provider cannot serve fails instead "
+                        "of being silently rerouted. List the choices with "
+                        "--list-providers.")
+    p.add_argument("--list-providers", action="store_true", dest="list_providers",
+                   help="Print the upstream providers OpenRouter can route --model to, "
+                        "as slugs usable with --provider, and exit.")
     p.add_argument("--api-type", default="openai-completions",
                    choices=["openai-completions", "openai-responses", "anthropic-messages"],
                    help="The *actual* backend transport behind the endpoint/script, for "
@@ -269,15 +284,112 @@ def _llmprobe_commit() -> str | None:
 
 # -- helpers ------------------------------------------------------------------
 
-def make_client(api_key: str) -> openai.OpenAI:
+# -- provider pinning ----------------------------------------------------------
+#
+# An aggregator like OpenRouter is not one endpoint: the same model id is served
+# by a dozen upstream providers running different inference software (vLLM,
+# SGLang, TensorRT, a vendor's own stack) under different configuration. They do
+# not agree on capabilities -- observed directly while developing TDEF, where
+# two consecutive unpinned runs of the same model on the same URL answered
+# `accepted-but-ignored` once and `rejected` (an SGLang validation error) the
+# next, because the request landed on different providers.
+#
+# So an unpinned aggregator report measures "whatever served that request",
+# which is not a property of anything reproducible. `--provider` pins routing to
+# one upstream and turns fallbacks off, and pinned reports are filed per
+# provider. The observed provider is recorded alongside the requested one,
+# because a pin that silently fails to apply would otherwise look like a result.
+
+
+def _provider_routing(provider: str) -> dict:
+    """OpenRouter's routing block: this provider only, never a fallback."""
+    return {"order": [provider], "allow_fallbacks": False}
+
+
+def _observed_provider(resp: object) -> str | None:
+    """The provider an aggregator says actually served a response, if it says."""
+    for source in (getattr(resp, "model_extra", None), resp):
+        if isinstance(source, dict) and isinstance(source.get("provider"), str):
+            return source["provider"]
+    provider = getattr(resp, "provider", None)
+    return provider if isinstance(provider, str) else None
+
+
+def _record_observed_provider(resp: object) -> None:
+    """Remember who actually served a response, so a failed pin is visible."""
+    global _OBSERVED_PROVIDER
+    provider = _observed_provider(resp)
+    if provider:
+        _OBSERVED_PROVIDER = provider
+
+
+def openrouter_providers(model: str) -> list[dict]:
+    """Providers OpenRouter can route `model` to, newest metadata first.
+
+    Returns `{"slug", "name", "context_length", "supports_tools"}` per endpoint;
+    `slug` is what --provider takes.
+    """
+    url = ("https://openrouter.ai/api/v1/models/"
+           + urllib.parse.quote(model) + "/endpoints")
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        data = json.load(resp).get("data") or {}
+    providers = []
+    for endpoint in data.get("endpoints") or []:
+        supported = endpoint.get("supported_parameters") or []
+        providers.append({
+            "slug": endpoint.get("tag"),
+            "name": endpoint.get("provider_name"),
+            "context_length": endpoint.get("context_length"),
+            "supports_tools": "tools" in supported,
+        })
+    return providers
+
+
+class _PinnedCompletions:
+    """Wraps `.chat.completions`, adding the provider block to every request."""
+
+    def __init__(self, inner, provider: str):
+        self._inner = inner
+        self._provider = provider
+
+    def create(self, **kwargs):
+        extra_body = dict(kwargs.get("extra_body") or {})
+        extra_body.setdefault("provider", _provider_routing(self._provider))
+        kwargs["extra_body"] = extra_body
+        return self._inner.create(**kwargs)
+
+
+class _PinnedChat:
+    def __init__(self, inner, provider: str):
+        self.completions = _PinnedCompletions(inner.completions, provider)
+
+
+class PinnedClient:
+    """A client that pins every chat call to one upstream provider.
+
+    Everything other than `.chat` is delegated untouched, so `/models` metadata
+    lookups and the like keep working exactly as before.
+    """
+
+    def __init__(self, client, provider: str):
+        self._client = client
+        self.chat = _PinnedChat(client.chat, provider)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+def make_client(api_key: str) -> "openai.OpenAI | PinnedClient":
     if not api_key.strip():
         # Some free endpoints (e.g. opencode.ai/zen) require no auth at all
         # and 401 on any non-empty bearer token. httpx also rejects a
         # whitespace-only header value outright, so blank it via
         # default_headers rather than passing it through api_key.
-        return openai.OpenAI(api_key="unused", base_url=ENDPOINT,
-                             default_headers={"Authorization": ""})
-    return openai.OpenAI(api_key=api_key, base_url=ENDPOINT)
+        client = openai.OpenAI(api_key="unused", base_url=ENDPOINT,
+                               default_headers={"Authorization": ""})
+    else:
+        client = openai.OpenAI(api_key=api_key, base_url=ENDPOINT)
+    return PinnedClient(client, _PROVIDER) if _PROVIDER else client
 
 
 # -- local-script "inference server" adapter -----------------------------------
@@ -387,9 +499,22 @@ def _known_server_for(endpoint: str, safe_model: str) -> str | None:
     return None
 
 
-def _report_dir(endpoint: str, safe_model: str, server: str | None = None) -> Path:
-    """reports/<server>/<model>/ — one directory per model per server."""
-    return Path("reports") / (server or _safe_server(endpoint)) / safe_model
+def _safe_provider(provider: str) -> str:
+    """Filesystem-safe slug for a provider tag (`deepinfra/fp8` -> `deepinfra_fp8`)."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", provider).strip("_") or "unknown-provider"
+
+
+def _report_dir(endpoint: str, safe_model: str, server: str | None = None,
+                provider: str | None = None) -> Path:
+    """reports/<server>/<model>/ — one directory per model per server.
+
+    A run pinned to one upstream provider of an aggregator nests one level
+    deeper, reports/<server>/<model>/<provider>/, because those are genuinely
+    different servers behind one URL. Unpinned runs keep the old two-level
+    path, so existing reports stay where they are.
+    """
+    base = Path("reports") / (server or _safe_server(endpoint)) / safe_model
+    return base / _safe_provider(provider) if provider else base
 
 
 def _init_probe_dir(safe_model: str) -> None:
@@ -499,7 +624,9 @@ def chat(client: openai.OpenAI, messages: list[dict], tools: list[dict] | None =
         kwargs["tools"] = tools
         kwargs["tool_choice"] = tool_choice
     try:
-        return client.chat.completions.create(**kwargs)
+        resp = client.chat.completions.create(**kwargs)
+        _record_observed_provider(resp)
+        return resp
     except openai.APITimeoutError as e:
         sys.exit(f"ERROR: LLM call timed out after 300 seconds. Model={MODEL}, messages={json.dumps(messages, indent=2, default=str)[:500]}... Exception: {e}")
 
@@ -1316,9 +1443,19 @@ def _tool_param_signature(tool: dict) -> str:
     return f"{name}({', '.join(parts)})"
 
 
+def _summary_label(data: dict, fallback: str) -> str:
+    """`model` in listings, or `model @ provider` for a provider-pinned run."""
+    model = data.get("model", fallback)
+    provider = data.get("provider")
+    return f"{model} @ {provider}" if provider else model
+
+
 def quick_summary() -> None:
     import glob
-    paths = sorted(set(glob.glob("reports/*/*/capabilities_*.json"))
+    # Three depths: the legacy reports/<model>/, reports/<server>/<model>/, and
+    # reports/<server>/<model>/<provider>/ for runs pinned to one upstream.
+    paths = sorted(set(glob.glob("reports/*/*/*/capabilities_*.json"))
+                   | set(glob.glob("reports/*/*/capabilities_*.json"))
                    | set(glob.glob("reports/*/capabilities_*.json")))
     if not paths:
         print("No schema json files found under reports/<server>/<model>/.")
@@ -1333,7 +1470,7 @@ def quick_summary() -> None:
         except Exception as e:
             other.append((path, f"unreadable: {e}"))
             continue
-        model = data.get("model", path)
+        model = _summary_label(data, path)
         behaviour = data.get("behaviour") or {}
         mode = behaviour.get("call_delivery_mode")
         status = data.get("status", "ok")
@@ -1344,7 +1481,7 @@ def quick_summary() -> None:
 
     print(f"Models with native structured tool_calls support  ({len(structured_list)}/{len(paths)}):\n")
     for data in structured_list:
-        model    = data.get("model", "?")
+        model    = _summary_label(data, "?")
         endpoint = data.get("endpoint", "?")
         print(f"  * {model}   [{endpoint}]")
         for tool in data.get("inferred_tool_schema") or []:
@@ -3184,6 +3321,10 @@ def _tdef_surface_payload(surface: str, model: str, tools: list[dict],
                    "messages": [{"role": "user", "content": prompt}]}
     if entries:
         payload["tools"] = entries
+    if _PROVIDER:
+        # Same pin as every other round: an aggregator that reroutes mid-probe
+        # would compare token counts across two different inference stacks.
+        payload["provider"] = _provider_routing(_PROVIDER)
     return payload
 
 
@@ -3216,6 +3357,21 @@ def _tdef_error_text(body: object) -> str:
                 return body[key]
         return json.dumps(body)[:2000]
     return ""
+
+
+def _tdef_routing_failure(text: str) -> bool:
+    """True when an aggregator could not route the request at all.
+
+    OpenRouter answers a pin it cannot satisfy with `404 No endpoints found
+    for <model>` plus a `routing_funnel` — the same status an unimplemented
+    path returns. Reading that as "this surface is not served here" would
+    quietly turn a broken pin into a capability finding, so it is checked
+    first and reported as an error.
+    """
+    lowered = text.lower()
+    return any(marker in lowered for marker in
+               ("no endpoints found", "routing_funnel", "no allowed providers",
+                "no provider", "provider not found"))
 
 
 def _tdef_surface_absent(status: int | None, text: str) -> bool:
@@ -3252,6 +3408,15 @@ def _tdef_rejected_component(text: str, search_index: int | None = None,
                  ("tool_search", "tool search", "tool_search_tool"))
     if not search and search_index is not None:
         search = bool(re.search(rf"tools[\[.]{search_index}\b", lowered))
+    if not search:
+        # The search tool is the one entry in the request with no `function`
+        # member, so every inference stack complains about that same missing
+        # field in its own dialect: serde's "missing field `function`",
+        # pydantic's "Field required", Fireworks' "Input should be...".
+        search = bool(
+            re.search(r"missing (the )?(required )?field `?function`?", lowered)
+            or re.search(r"`?function`?\s+(field\s+)?is required", lowered)
+            or ("field required" in lowered and "function.function" in lowered))
     if not field:
         field = any(re.search(rf"tools[\[.]{i}\b", lowered) for i in deferred_indices)
     if field and search:
@@ -3347,6 +3512,10 @@ def _tdef_probe_surface(surface: str, url: str, model: str,
                                    "deferred"), headers)
     text = _tdef_error_text(body)
     result["deferred_request_status"] = status
+    served_by = _observed_provider(body)
+    if served_by:
+        result["served_by"] = served_by
+        _record_observed_provider(body)
     if status is None:
         result["verdict"] = "n/a"
         result["evidence"] = text
@@ -3355,7 +3524,11 @@ def _tdef_probe_surface(surface: str, url: str, model: str,
         rejected = _tdef_rejected_component(
             text, search_index=len(tools),
             deferred_indices=tuple(i for i, t in enumerate(tools) if t["deferrable"]))
-        if _tdef_surface_absent(status, text):
+        if _tdef_routing_failure(text):
+            result["verdict"] = "error"
+            result["evidence"] = (f"HTTP {status}: the request was never routed to a "
+                                  f"model — {text[:300]}")
+        elif _tdef_surface_absent(status, text):
             result["verdict"] = "n/a"
             result["evidence"] = f"HTTP {status}: this protocol surface is not served here"
         elif rejected:
@@ -3368,18 +3541,30 @@ def _tdef_probe_surface(surface: str, url: str, model: str,
         return result
 
     deferred_tokens = _tdef_input_tokens(body)
-    _, inline_body = _tdef_post(
+    inline_status, inline_body = _tdef_post(
         url, _tdef_surface_payload(surface, model, tools, _TDEF_BASE_PROMPT,
                                    "inline"), headers)
-    _, bare_body = _tdef_post(
+    bare_status, bare_body = _tdef_post(
         url, _tdef_surface_payload(surface, model, tools, _TDEF_BASE_PROMPT,
                                    "bare"), headers)
     inline_tokens = _tdef_input_tokens(inline_body)
     bare_tokens = _tdef_input_tokens(bare_body)
     result["input_tokens"] = {"bare": bare_tokens, "inline": inline_tokens,
                               "deferred": deferred_tokens}
-    verdict, detail = _tdef_classify_tokens(bare_tokens, inline_tokens,
-                                            deferred_tokens)
+    if bare_status != 200:
+        result["baseline_request_status"] = bare_status
+    control_failed = inline_status != 200
+    if control_failed:
+        # Without the control request there is nothing to compare against, and
+        # a missing token count must not be read as "the schemas stayed in".
+        result["control_request_status"] = inline_status
+        verdict, detail = None, (
+            f"the control request (schemas inline) failed with HTTP "
+            f"{inline_status}, so no comparison was possible: "
+            f"{_tdef_error_text(inline_body)[:200]}")
+    else:
+        verdict, detail = _tdef_classify_tokens(bare_tokens, inline_tokens,
+                                                deferred_tokens)
     result["token_accounting"] = detail
 
     _, reach_body = _tdef_post(
@@ -3395,11 +3580,18 @@ def _tdef_probe_surface(surface: str, url: str, model: str,
         else "no_call")
     result["called_tools"] = called
 
-    if verdict is None:
-        # No usable token counts: a genuine search round-trip is the only
-        # remaining positive evidence, and a direct call to a deferred tool
-        # is proof the schema was in the prompt.
-        verdict = "native" if searched else "accepted-but-ignored"
+    if verdict is None and searched:
+        # A genuine search round-trip stands on its own.
+        verdict = "native"
+        result["token_accounting"] = detail + "; verdict taken from the reachability round instead"
+    elif verdict is None and control_failed:
+        # Nothing was measured and nothing was observed: report that, rather
+        # than defaulting to a verdict the probe did not earn.
+        verdict = "error"
+    elif verdict is None:
+        # Usage was simply never reported. A direct call to a deferred tool is
+        # still proof the schema was in the prompt; anything else is a miss.
+        verdict = "accepted-but-ignored" if called_deferred else "error"
         result["token_accounting"] = detail + "; verdict taken from the reachability round instead"
     elif searched and verdict != "native":
         # A real search round-trip outranks the counters, which a
@@ -3504,6 +3696,33 @@ _CTX_SOURCE_LABELS = {
 }
 
 
+_MULTI_PROVIDER_HOSTS = {"openrouter.ai"}
+
+
+def _md_provider_line(output: dict) -> str:
+    """The report's provider bullet, for aggregators that route to several.
+
+    Names both the pinned provider and the one that answered: a pin that did
+    not take hold makes every number in the report a measurement of something
+    else, and that has to be visible rather than inferred.
+    """
+    pinned = output.get("provider")
+    observed = output.get("observed_provider")
+    if not pinned and not observed:
+        if _safe_server(output.get("endpoint") or "") in _MULTI_PROVIDER_HOSTS:
+            return ("- **Provider:** unknown — this aggregator routes one model id to "
+                    "many upstreams running different software, and this run was not "
+                    "pinned, so each result below describes whichever one answered. "
+                    "Rerun with `--provider` for a reproducible report.")
+        return ""
+    if pinned and observed and observed.lower() not in pinned.lower():
+        return (f"- **Provider:** pinned to `{pinned}`, but `{observed}` answered "
+                f"— the pin did not hold, treat these results with suspicion")
+    if pinned:
+        return f"- **Provider:** `{pinned}` (pinned, fallbacks disabled)"
+    return f"- **Provider:** `{observed}` (not pinned — a rerun may land elsewhere)"
+
+
 def _md_context_window(output: dict) -> str:
     """One-line context-window summary for the report's header bullets."""
     ctx = output.get("context_window")
@@ -3569,6 +3788,9 @@ def render_markdown_report(output: dict) -> str:
         # Worth printing only when the endpoint does not already name it, i.e.
         # when a wrapper script fronts the real server.
         lines.append(f"- **Server:** {server}")
+    provider_line = _md_provider_line(output)
+    if provider_line:
+        lines.append(provider_line)
     lines.append(f"- **API type:** {output.get('api_type', 'OpenAI Completions')}")
     lines.append(f"- **Context window:** {_md_context_window(output)}")
     if _capability_absent(output, "cors_test"):
@@ -3828,6 +4050,9 @@ def render_markdown_report(output: dict) -> str:
                 evidence = evidence[:197] + "..."
             if data.get("rejected_component"):
                 evidence = f"rejects `{data['rejected_component']}` — {evidence}"
+            if data.get("served_by"):
+                # Surfaces of one aggregator can route to different upstreams.
+                evidence = f"served by `{data['served_by']}`; {evidence}"
             lines.append(f"| `{name}` | {data.get('verdict', 'n/a')} | {counts} | "
                          f"{data.get('reachability') or '—'} | "
                          f"{_md_escape(evidence) or '—'} |")
@@ -4493,12 +4718,26 @@ def _find_missing_capabilities(output: dict) -> list[str]:
 # -- main ---------------------------------------------------------------------
 
 def main():
-    global ENDPOINT, MODEL, _KEY_NAME
+    global ENDPOINT, MODEL, _KEY_NAME, _PROVIDER
 
     args = parse_args()
     if args.quick_summary:
         quick_summary()
         return
+    if args.list_providers:
+        if not args.model:
+            sys.exit("--list-providers needs --model.")
+        providers = openrouter_providers(args.model)
+        if not providers:
+            sys.exit(f"OpenRouter lists no providers for {args.model}.")
+        print(f"{len(providers)} providers serve {args.model} on OpenRouter:\n")
+        for p in providers:
+            tools = "tools" if p["supports_tools"] else "no tools"
+            context = f"{p['context_length']:,}" if p["context_length"] else "?"
+            print(f"  --provider {p['slug']:<20} {p['name']:<14} "
+                  f"{context:>11} ctx, {tools}")
+        return
+    _PROVIDER = args.provider
     if args.script:
         ENDPOINT = f"script:{args.script}"
     elif args.endpoint:
@@ -4517,7 +4756,7 @@ def main():
             print(f"Warning: {ENDPOINT} did not report an 'x_upstream_endpoint'; "
                   f"filing this run under reports/unknown-server/. Pass --server "
                   f"to name it explicitly.")
-    report_dir = _report_dir(ENDPOINT, safe_model, server)
+    report_dir = _report_dir(ENDPOINT, safe_model, server, _PROVIDER)
     report_dir.mkdir(parents=True, exist_ok=True)
     out_path   = args.output or str(report_dir / f"capabilities_{safe_model}.json")
 
@@ -4580,15 +4819,33 @@ def main():
         return
 
     if args.tdef_only:
-        if not Path(out_path).exists():
+        if Path(out_path).exists():
+            with open(out_path) as f:
+                output = json.load(f)
+        elif _PROVIDER:
+            # First pinned run for this provider: there is no report to refresh
+            # and nothing to inherit -- every other capability was measured on
+            # whichever provider happened to answer, which is not this one. So
+            # start an empty report; the untested capabilities render as "no
+            # data" rather than borrowing another provider's answers.
+            print(f"No report yet for provider {_PROVIDER}; starting one with "
+                  f"TDEF only. Run the full probe with --provider {_PROVIDER} "
+                  f"to fill in the rest.")
+            output = {"model": MODEL, "llmprobe_commit": _llmprobe_commit(),
+                      "endpoint": ENDPOINT, "provider": _PROVIDER,
+                      "observed_provider": None,
+                      "api_type": API_TYPE_LABELS[args.api_type],
+                      "status": "ok", "error": None}
+        else:
             sys.exit(f"Cannot run --tdef-only: {out_path} does not exist. "
                      "Run the full probe first.")
-        with open(out_path) as f:
-            output = json.load(f)
         print(f"Target: {ENDPOINT}")
         print(f"Model:  {MODEL}")
         api_key = "" if args.script else get_api_key(args.key_name)
         output["tdef_test"] = tdef_test_round(api_key, args)
+        if _PROVIDER:
+            output["provider"] = _PROVIDER
+        output["observed_provider"] = _OBSERVED_PROVIDER or output.get("observed_provider")
         md_path = _capabilities_md_path(out_path)
         with open(out_path, "w") as f:
             json.dump(output, f, indent=2)
@@ -4627,6 +4884,8 @@ def main():
         "model":                MODEL,
         "llmprobe_commit":      _llmprobe_commit(),
         "endpoint":             ENDPOINT,
+        "provider":             _PROVIDER,
+        "observed_provider":    None,
         "server":               report_dir.parent.name,
         "api_type":             API_TYPE_LABELS[args.api_type],
         "status":               "incomplete",
@@ -4656,6 +4915,7 @@ def main():
     md_path = _capabilities_md_path(out_path)
 
     def save(note: str = ""):
+        output["observed_provider"] = _OBSERVED_PROVIDER
         with open(out_path, "w") as f:
             json.dump(output, f, indent=2)
         with open(md_path, "w") as f:

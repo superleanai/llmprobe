@@ -6,7 +6,10 @@ capabilities by actually calling it, instead of trusting vendor docs.
 Results are written as JSON + Markdown per model under
 `reports/<server>/<model>/`, where `<server>` is the endpoint's host
 (`api.kimi.com`, `openrouter.ai`, ...), so the same model served by
-different providers stays separate and comparable side by side.
+different providers stays separate and comparable side by side. A run
+pinned to one upstream provider of an aggregator nests one level deeper,
+`reports/<server>/<model>/<provider>/` — see
+[Aggregators: pin the provider](#aggregators-pin-the-provider).
 
 ## Capabilities
 
@@ -49,6 +52,30 @@ python3 probe_inference.py \
 
 `--endpoint` is the API's base URL, not the full `chat/completions` path
 (the `openai` client appends that itself).
+
+### Aggregators: pin the provider
+
+An aggregator such as OpenRouter is not one endpoint. The same model id is
+served by a dozen upstream providers running different inference software
+under different configuration, and they do not agree on capabilities — two
+consecutive unpinned runs of the same model on the same URL have answered
+differently because the requests landed on different providers.
+
+```bash
+python3 probe_inference.py --model deepseek/deepseek-v4.1-flash --list-providers
+python3 probe_inference.py \
+  --endpoint https://openrouter.ai/api/v1 \
+  --model deepseek/deepseek-v4.1-flash \
+  --key-name OPENROUTER_API_KEY \
+  --provider fireworks
+```
+
+`--provider` pins routing to one upstream and turns fallbacks off, so a
+request that provider cannot serve fails instead of being silently
+rerouted. A pinned run is filed one level deeper, under
+`reports/<server>/<model>/<provider>/`; unpinned runs keep the old
+two-level path. Every report records the provider it asked for and the one
+that answered, and an unpinned report on a multi-provider host says so.
 
 This runs the full probe — tool-name/parameter elicitation plus every
 capability test below — and writes:

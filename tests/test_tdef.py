@@ -133,6 +133,12 @@ def test_rejection_says_which_half_of_the_feature_was_refused():
     assert pi._tdef_rejected_component("tools.0.something is not supported",
                                        search_index=4,
                                        deferred_indices=(0, 1, 2)) == "defer_loading"
+    # The search tool is the only entry without a `function` member, and each
+    # inference stack behind OpenRouter complains about it in its own dialect.
+    for dialect in ("Invalid JSON data: missing field `function`",
+                    "Field required (param: tools.9.function.function)",
+                    "function is required"):
+        assert pi._tdef_rejected_component(dialect) == "tool_search", dialect
 
 
 def test_404_means_the_surface_is_absent(monkeypatch):
@@ -142,6 +148,29 @@ def test_404_means_the_surface_is_absent(monkeypatch):
     result = pi._tdef_probe_surface("openai-responses", "https://x/responses", "m", {})
 
     assert result["verdict"] == "n/a"
+
+
+def test_unroutable_pin_is_an_error_not_an_absent_surface(monkeypatch):
+    """OpenRouter refuses an unsatisfiable provider pin with the same 404."""
+    fake, _ = _fake_post([(404, {"error": {
+        "message": "No endpoints found for deepseek/deepseek-v4.1-flash.",
+        "code": 404, "metadata": {"routing_funnel": []}}})])
+    monkeypatch.setattr(pi, "_tdef_post", fake)
+
+    result = pi._tdef_probe_surface("openai-completions", "https://x/c", "m", {})
+
+    assert result["verdict"] == "error"
+    assert "never routed" in result["evidence"]
+
+
+def test_provider_pin_rides_on_every_tdef_request(monkeypatch):
+    monkeypatch.setattr(pi, "_PROVIDER", "deepinfra/fp8")
+
+    payload = pi._tdef_surface_payload("openai-responses", "m", pi._tdef_tools(),
+                                       "hi", "deferred")
+
+    assert payload["provider"] == {"order": ["deepinfra/fp8"],
+                                   "allow_fallbacks": False}
 
 
 def test_200_with_unchanged_token_count_is_accepted_but_ignored(monkeypatch):

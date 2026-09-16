@@ -398,3 +398,44 @@ than under `--endpoint` (`https://api.deepseek.com/anthropic`,
 `https://api.z.ai/api/anthropic`). The probe guesses them from the endpoint
 host; `--tdef-responses-base`, `--tdef-anthropic-base` and
 `--tdef-anthropic-model` override the guess for vendors that disagree.
+
+## Provider pinning on aggregators
+
+Not a capability, but a precondition for measuring one on an aggregator.
+OpenRouter routes a single model id to a dozen upstream providers running
+different inference software under different configuration, and the probe
+has measured them disagreeing:
+
+- On `deepseek/deepseek-v4.1-flash`, the OpenAI **Responses** surface is
+  `TDEF: native` through Fireworks, Together, Parasail, DeepInfra, Novita
+  and Phala — OpenRouter's own tool-search layer — while the same request
+  through BaseTen is rate-limited upstream and returns no verdict at all.
+- The **chat completions** surface rejects the tool-search tool in a
+  different dialect per provider: `422 Field required` with a
+  `tools.4.function.function` path (DeepInfra, pydantic), ``missing field
+  `function` `` (Together, serde), `Input should be...` (Fireworks), and an
+  opaque `invalid request error trace_id: ...` (Novita) that names nothing
+  and can only be recorded as an error.
+- Even the token counts differ: the same four tool schemas cost 4,856 input
+  tokens through Fireworks, Together, Parasail and DeepInfra, and 4,800
+  through Novita and Phala — different tokeniser configuration behind one
+  model id.
+
+So an unpinned aggregator report measures "whichever provider answered",
+which is not a property of anything reproducible. `--provider <slug>` pins
+routing to one upstream (`{"order": [slug], "allow_fallbacks": false}`) on
+every request the probe makes, including the raw ones in `TDEF`, and files
+the run under `reports/<server>/<model>/<provider>/`. `--list-providers`
+prints the slugs OpenRouter will accept for a model.
+
+Every report records both `provider` (asked for) and `observed_provider`
+(who answered). A pin that did not hold is called out in the Markdown
+header rather than left to be inferred, because it would otherwise make
+every number in the report a measurement of a different server. An unpinned
+report on a known multi-provider host says so in the same place.
+
+One trap worth knowing: OpenRouter refuses a pin it cannot satisfy with
+`404 No endpoints found for <model>` plus a `routing_funnel` — the same
+status an unimplemented path returns. `TDEF` checks for that first, so a
+broken pin is reported as an error rather than as "this surface is not
+served here".

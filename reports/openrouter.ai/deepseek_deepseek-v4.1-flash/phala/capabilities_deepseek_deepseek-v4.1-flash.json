@@ -1,0 +1,48 @@
+{
+  "model": "deepseek/deepseek-v4.1-flash",
+  "llmprobe_commit": "7e83ba6eac9873ed24b383d319a9168c56c39cd4",
+  "endpoint": "https://openrouter.ai/api/v1",
+  "provider": "phala",
+  "observed_provider": null,
+  "api_type": "OpenAI Completions",
+  "status": "ok",
+  "error": null,
+  "tdef_test": {
+    "surfaces": {
+      "openai-completions": {
+        "surface": "openai-completions",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "deferred_request_status": 400,
+        "verdict": "error",
+        "evidence": "HTTP 400: Provider returned error 400 {'raw': '{\"error\":{\"message\":\"The request was rejected as invalid\",\"type\":\"invalid_request_error\",\"code\":null,\"param\":null}}', 'provider_name': 'Phala', 'is_byok': False}"
+      },
+      "openai-responses": {
+        "surface": "openai-responses",
+        "url": "https://openrouter.ai/api/v1/responses",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "deferred_request_status": 200,
+        "input_tokens": {
+          "bare": 37,
+          "inline": 4837,
+          "deferred": 1554
+        },
+        "token_accounting": "tool schemas cost 4800 input tokens inline; deferring them changed the prompt by 3283",
+        "reachability": "search_then_call",
+        "called_tools": [
+          "warehouse_inventory_lookup"
+        ],
+        "verdict": "native"
+      },
+      "anthropic-messages": {
+        "surface": "anthropic-messages",
+        "url": "https://openrouter.ai/api/anthropic/v1/messages",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "deferred_request_status": 404,
+        "verdict": "n/a",
+        "evidence": "HTTP 404: this protocol surface is not served here"
+      }
+    },
+    "verdict": "native"
+  }
+}

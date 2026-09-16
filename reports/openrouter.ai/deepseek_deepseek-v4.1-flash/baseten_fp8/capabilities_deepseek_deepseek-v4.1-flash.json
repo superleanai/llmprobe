@@ -1,0 +1,40 @@
+{
+  "model": "deepseek/deepseek-v4.1-flash",
+  "llmprobe_commit": "7e83ba6eac9873ed24b383d319a9168c56c39cd4",
+  "endpoint": "https://openrouter.ai/api/v1",
+  "provider": "baseten/fp8",
+  "observed_provider": null,
+  "api_type": "OpenAI Completions",
+  "status": "ok",
+  "error": null,
+  "tdef_test": {
+    "surfaces": {
+      "openai-completions": {
+        "surface": "openai-completions",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "deferred_request_status": 400,
+        "verdict": "rejected",
+        "rejected_component": "tool_search",
+        "evidence": "HTTP 400: Provider returned error 400 {'raw': '{\\n\\t\"error\": {\\n\\t\\t\"code\": \"400\",\\n\\t\\t\"message\": \"Failed to deserialize the JSON body into the target type: unknown variant `tool_search`, expected `function` at line 1 column 21898\",\\n\\t\\t\"type\": \"Bad Request\"\\n\\t}\\n}\\n', 'provider_name': 'BaseTen', 'is_byok': False, 'provider_error_code': '400'}"
+      },
+      "openai-responses": {
+        "surface": "openai-responses",
+        "url": "https://openrouter.ai/api/v1/responses",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "deferred_request_status": 429,
+        "verdict": "error",
+        "evidence": "HTTP 429: Provider returned error 429 {'provider_name': None}"
+      },
+      "anthropic-messages": {
+        "surface": "anthropic-messages",
+        "url": "https://openrouter.ai/api/anthropic/v1/messages",
+        "model": "deepseek/deepseek-v4.1-flash",
+        "deferred_request_status": 404,
+        "verdict": "n/a",
+        "evidence": "HTTP 404: this protocol surface is not served here"
+      }
+    },
+    "verdict": "rejected"
+  }
+}
