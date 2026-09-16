@@ -55,7 +55,7 @@ sent for any of this.
 | Preflight | FAIL — allow-origin present, POST allowed, authorization + content-type headers allowed |
 | Actual response | PASS — CORS headers also present on a plain Origin-tagged GET |
 | Allow-credentials | yes |
-| Evidence | OPTIONS https://api.z.ai/api/coding/paas/v4/chat/completions -> access-control-allow-origin: (none); GET /models -> access-control-allow-origin: https://llmprobe.example |
+| Evidence | OPTIONS https://openrouter.ai/api/v1/chat/completions -> access-control-allow-origin: (none); GET /models -> access-control-allow-origin: https://llmprobe.example |
 
 | Probe | Status | Allow-origin | Allow-methods | Allow-headers | Result |
 |---|---|---|---|---|---|

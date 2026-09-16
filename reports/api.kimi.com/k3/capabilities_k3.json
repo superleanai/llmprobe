@@ -2,6 +2,7 @@
   "model": "k3",
   "llmprobe_commit": "7f6719563cdd08d5cd5aea4bc7d4c38062423803",
   "endpoint": "https://api.kimi.com/coding/v1",
+  "server": "api.kimi.com",
   "api_type": "OpenAI Completions",
   "status": "ok",
   "error": null,

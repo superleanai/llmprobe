@@ -1,6 +1,7 @@
 {
-  "model": "gpt-5-mini",
-  "endpoint": "script:/home/martin/bin/copilot-gpt-5-mini-completions.py",
+  "model": "gpt-5.6-luna",
+  "endpoint": "script:/home/martin/bin/copilot-gpt-5.6-luna.py",
+  "server": "api.individual.githubcopilot.com",
   "api_type": "OpenAI Completions",
   "status": "ok",
   "error": null,
@@ -12,12 +13,12 @@
   "elicited_names": {
     "read_file": "read_file",
     "write_file": "write_file",
-    "update_file": "apply_patch",
-    "execute_bash": "run_shell",
+    "update_file": "replace_in_file",
+    "execute_bash": "run_shell_command",
     "ask_user_question": "ask_user_question",
-    "list_directory": "list_dir",
-    "search_files": "run_command",
-    "glob": "find_files"
+    "list_directory": "list_directory",
+    "search_files": "grep",
+    "glob": "glob.glob"
   },
   "inferred_tool_schema": [
     {
@@ -54,24 +55,11 @@
             "content": {
               "type": "string",
               "description": "content"
-            },
-            "mode": {
-              "type": "string",
-              "description": "mode (must be 'w')",
-              "enum": [
-                "w"
-              ]
-            },
-            "encoding": {
-              "type": "string",
-              "description": "encoding"
             }
           },
           "required": [
             "path",
-            "content",
-            "mode",
-            "encoding"
+            "content"
           ]
         }
       }
@@ -79,18 +67,28 @@
     {
       "type": "function",
       "function": {
-        "name": "apply_patch",
+        "name": "replace_in_file",
         "description": "Perform the 'update_file' operation.",
         "parameters": {
           "type": "object",
           "properties": {
-            "patch": {
+            "path": {
               "type": "string",
-              "description": "patch"
+              "description": "path"
+            },
+            "old_string": {
+              "type": "string",
+              "description": "old string"
+            },
+            "new_string": {
+              "type": "string",
+              "description": "new string"
             }
           },
           "required": [
-            "patch"
+            "path",
+            "old_string",
+            "new_string"
           ]
         }
       }
@@ -98,7 +96,7 @@
     {
       "type": "function",
       "function": {
-        "name": "run_shell",
+        "name": "run_shell_command",
         "description": "Perform the 'execute_bash' operation.",
         "parameters": {
           "type": "object",
@@ -136,7 +134,7 @@
     {
       "type": "function",
       "function": {
-        "name": "list_dir",
+        "name": "list_directory",
         "description": "Perform the 'list_directory' operation.",
         "parameters": {
           "type": "object",
@@ -144,6 +142,29 @@
             "path": {
               "type": "string",
               "description": "path"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "grep",
+        "description": "Perform the 'search_files' operation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "pattern"
+            },
+            "path": {
+              "type": "string",
+              "description": "path"
             },
             "recursive": {
               "type": "boolean",
@@ -151,6 +172,7 @@
             }
           },
           "required": [
+            "pattern",
             "path",
             "recursive"
           ]
@@ -160,37 +182,14 @@
     {
       "type": "function",
       "function": {
-        "name": "run_command",
-        "description": "Perform the 'search_files' operation.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "command": {
-              "type": "string",
-              "description": "command"
-            }
-          },
-          "required": [
-            "command"
-          ]
-        }
-      }
-    },
-    {
-      "type": "function",
-      "function": {
-        "name": "find_files",
+        "name": "glob_glob",
         "description": "Perform the 'glob' operation.",
         "parameters": {
           "type": "object",
           "properties": {
-            "path": {
+            "pathname": {
               "type": "string",
-              "description": "path"
-            },
-            "pattern": {
-              "type": "string",
-              "description": "pattern"
+              "description": "pathname"
             },
             "recursive": {
               "type": "boolean",
@@ -198,8 +197,7 @@
             }
           },
           "required": [
-            "path",
-            "pattern",
+            "pathname",
             "recursive"
           ]
         }
@@ -207,10 +205,10 @@
     }
   ],
   "behaviour": {
-    "call_delivery_mode": "mixed",
-    "structured_tool_calls": 7,
+    "call_delivery_mode": "structured_tool_calls",
+    "structured_tool_calls": 8,
     "inline_json_in_content": 0,
-    "no_call_detected": 1,
+    "no_call_detected": 0,
     "note": "Model correctly uses the structured tool_calls API field."
   },
   "tool_dispatch": {
@@ -227,26 +225,40 @@
         "content": "content"
       }
     },
-    "run_shell": {
+    "run_shell_command": {
       "python_function": "t_run",
       "param_map": {
         "command": "command"
       }
     },
-    "list_dir": {
+    "ask_user_question": {
+      "python_function": "t_ask_user",
+      "param_map": {
+        "question": "question"
+      }
+    },
+    "list_directory": {
       "python_function": "t_list_dir",
       "param_map": {
         "path": "path"
       }
     },
-    "find_files": {
-      "python_function": "t_glob",
-      "param_map": {}
+    "grep": {
+      "python_function": "t_search",
+      "param_map": {
+        "pattern": "pattern",
+        "path": "path"
+      }
+    },
+    "glob_glob": {
+      "python_function": "t_read",
+      "param_map": {
+        "pathname": "path"
+      }
     }
   },
   "dispatch_conflicts": {
-    "update_file": "read_file",
-    "search_files": "run_shell"
+    "update_file": "read_file"
   },
   "tsel_test": {
     "tsel_results": {
@@ -264,42 +276,42 @@
       },
       "update_file": {
         "pass": false,
-        "expected_function_name": "apply_patch",
+        "expected_function_name": "replace_in_file",
         "function_name": "read_file",
-        "error": "called 'read_file' instead of 'apply_patch'"
+        "error": "called 'read_file' instead of 'replace_in_file'"
       },
       "execute_bash": {
         "pass": true,
-        "expected_function_name": "run_shell",
-        "function_name": "run_shell",
+        "expected_function_name": "run_shell_command",
+        "function_name": "run_shell_command",
         "error": null
       },
       "ask_user_question": {
-        "pass": false,
+        "pass": true,
         "expected_function_name": "ask_user_question",
-        "function_name": null,
-        "error": "no tool call detected"
+        "function_name": "ask_user_question",
+        "error": null
       },
       "list_directory": {
         "pass": true,
-        "expected_function_name": "list_dir",
-        "function_name": "list_dir",
+        "expected_function_name": "list_directory",
+        "function_name": "list_directory",
         "error": null
       },
       "search_files": {
-        "pass": false,
-        "expected_function_name": "run_command",
-        "function_name": "run_shell",
-        "error": "called 'run_shell' instead of 'run_command'"
+        "pass": true,
+        "expected_function_name": "grep",
+        "function_name": "grep",
+        "error": null
       },
       "glob": {
-        "pass": true,
-        "expected_function_name": "find_files",
-        "function_name": "find_files",
-        "error": null
+        "pass": false,
+        "expected_function_name": "glob.glob",
+        "function_name": "glob_glob",
+        "error": "called 'glob_glob' instead of 'glob.glob'"
       }
     },
-    "tsel_passed": 5,
+    "tsel_passed": 6,
     "tsel_total": 8
   },
   "quote_test": {
@@ -311,9 +323,7 @@
         "structured": true,
         "parsed_args": {
           "path": "/tmp/quote_test.txt",
-          "content": "She said \"hello\" and he replied \"goodbye, world\".",
-          "encoding": "utf-8",
-          "mode": "w"
+          "content": "She said \"hello\" and he replied \"goodbye, world\"."
         },
         "isolated": true,
         "function_name": "write_file"
@@ -327,7 +337,7 @@
           "command": "echo \"hello \\\"world\\\"\""
         },
         "isolated": true,
-        "function_name": "run_shell"
+        "function_name": "run_shell_command"
       },
       "update_file": {
         "task": "In /tmp/test.py, replace the string x = \"old value\" with x = \"new value\". Do not rewrite the whole file.",
@@ -335,10 +345,12 @@
         "error": null,
         "structured": true,
         "parsed_args": {
-          "patch": "*** Begin Patch\n*** Update File: /tmp/test.py\n@@\n-x = \"old value\"\n+x = \"new value\"\n*** End Patch"
+          "path": "/tmp/test.py",
+          "old_string": "x = \"old value\"",
+          "new_string": "x = \"new value\""
         },
         "isolated": true,
-        "function_name": "apply_patch"
+        "function_name": "replace_in_file"
       }
     },
     "quote_test_passed": 3,
@@ -350,66 +362,66 @@
         "task": "The file /var/log/app.log is 500,000 lines long. Find all lines containing the exact string 'FATAL ERROR' and show them to me.",
         "pass": true,
         "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
-        "function_name": "run_shell",
+        "function_name": "run_shell_command",
         "python_function": "t_run",
         "parsed_args": {
-          "command": "grep -n -- 'FATAL ERROR' /var/log/app.log || true"
+          "command": "grep -F 'FATAL ERROR' /var/log/app.log"
         }
       },
       "count_occurrences": {
         "task": "The file /var/data/access.log has several million lines. Tell me how many lines contain the IP address 203.0.113.42. I only need the count.",
         "pass": true,
         "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
-        "function_name": "run_shell",
+        "function_name": "run_shell_command",
         "python_function": "t_run",
         "parsed_args": {
-          "command": "grep -F -c '203.0.113.42' /var/data/access.log || true"
+          "command": "grep -F -c '203.0.113.42' /var/data/access.log"
         }
       },
       "specific_line": {
         "task": "The file /opt/build/output.txt is over a million lines long. What is on line 48213 of that file?",
-        "pass": false,
-        "reason": "read call has no offset/limit -- requests the whole file",
-        "function_name": "read_file",
-        "python_function": "t_read",
+        "pass": true,
+        "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
+        "function_name": "run_shell_command",
+        "python_function": "t_run",
         "parsed_args": {
-          "path": "/opt/build/output.txt"
+          "command": "sed -n '48213p' /opt/build/output.txt"
         }
       },
       "check_string_exists": {
         "task": "The file /var/log/build.log is huge (hundreds of thousands of lines). Does the word 'DeprecationWarning' appear anywhere in it? Just answer yes or no.",
         "pass": true,
         "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
-        "function_name": "run_shell",
+        "function_name": "run_shell_command",
         "python_function": "t_run",
         "parsed_args": {
-          "command": "if [ -f /var/log/build.log ]; then grep -m1 -F \"DeprecationWarning\" /var/log/build.log >/dev/null 2>&1 && echo yes || echo no; else echo no; fi"
+          "command": "grep -q 'DeprecationWarning' /var/log/build.log && echo yes || echo no"
         }
       },
       "function_definition_search": {
         "task": "The file /repo/src/model.py is 20,000 lines long. Find the line number where the function `def train_model` is defined.",
         "pass": true,
-        "reason": "t_glob does not dump file contents",
-        "function_name": "find_files",
-        "python_function": "t_glob",
+        "reason": "dedicated search tool used -- inherently filtered",
+        "function_name": "grep",
+        "python_function": "t_search",
         "parsed_args": {
-          "path": "/repo",
-          "pattern": "*.py",
-          "recursive": true
+          "pattern": "^def train_model\\b",
+          "path": "/repo/src/model.py",
+          "recursive": false
         }
       },
       "process_output_filter": {
         "task": "List all currently running processes, but I only care about the ones related to 'python'. Show me just those.",
         "pass": true,
         "reason": "command includes a filtering tool (grep/awk/sed/head/tail/wc/cut)",
-        "function_name": "run_shell",
+        "function_name": "run_shell_command",
         "python_function": "t_run",
         "parsed_args": {
-          "command": "ps aux | grep -i python | grep -v grep || true"
+          "command": "ps aux | grep -i '[p]ython'"
         }
       }
     },
-    "token_efficiency_passed": 5,
+    "token_efficiency_passed": 6,
     "token_efficiency_total": 6
   },
   "askq_test": {
@@ -420,15 +432,16 @@
         "pass": false,
         "function_name": null,
         "parsed_args": null,
-        "raw_content": "Do you want me to overwrite /tmp/test.txt directly or create a backup first? Please choose one:\n- \"overwrite\" \u2014 replace /tmp/test.txt right away\n- \"backup\" \u2014 make a backup (timestamped, e.g. /tmp/test.txt.20260826T123456) and then write\n- \"custom backup\" \u2014 I\u2019ll prompt you for a backup filename\n\nWhich do you prefer?"
+        "raw_content": "Would you like me to overwrite `/tmp/test.txt`, or create a backup first?"
       },
       "imperative_must": {
         "task": "You must ask the user this exact question before doing anything else: 'Should I overwrite /tmp/test.txt or create a backup first?' Do not perform any other action.",
         "system": "You are a helpful assistant with tool access.",
-        "pass": false,
-        "function_name": null,
-        "parsed_args": null,
-        "raw_content": "Should I overwrite /tmp/test.txt or create a backup first?"
+        "pass": true,
+        "function_name": "ask_user_question",
+        "parsed_args": {
+          "question": "Should I overwrite /tmp/test.txt or create a backup first?"
+        }
       },
       "explicit_tool_name": {
         "task": "Call the ask_user_question tool now with the question: 'Overwrite /tmp/test.txt or create a backup first?'",
@@ -445,16 +458,15 @@
         "pass": false,
         "function_name": null,
         "parsed_args": null,
-        "raw_content": "I recommend making a backup first (safer \u2014 avoids accidental data loss). If that sounds good, I can create a timestamped backup in the same directory and then overwrite /tmp/test.txt.\n\nOptions and commands you can use:\n\n- Create a simple backup and then overwrite:\n  - Backup: cp --preserve=mode,ownership,timestamps /tmp/test.txt /tmp/test.txt.bak\n  - Overwrite: echo \"new content\" > /tmp/test.txt\n\n- Create a timestamped backup (safer if you make multiple changes):\n  - Backup: cp --preserve=mode,ownership,timestamps /tmp/test.txt /tmp/test.txt.$(date +%Y%m%d%H%M%S).bak\n  - Overwrite: echo \"new content\" > /tmp/test.txt\n\n- If you need to preserve everything exactly (including SELinux context), consider using cp -a (or cp -p on macOS):\n  - Backup: cp -a /tmp/test.txt /tmp/test.txt.$(date +%Y%m%d%H%M%S).bak\n\nIf you prefer to skip the backup, tell me and I\u2019ll overwrite directly. Do you want me to make a timestamped backup and then overwrite now? If so, tell me what content should be written (or what operation should overwrite the file)."
+        "raw_content": "Please make a backup first, then overwrite `/tmp/test.txt`."
       },
       "ambiguous_no_ask_word": {
         "task": "There's ambiguity about whether /tmp/test.txt should be overwritten or backed up before I proceed. Resolve it.",
         "system": "You are a helpful assistant with tool access.",
         "pass": false,
-        "function_name": "run_shell",
-        "parsed_args": {
-          "command": "if [ -e /tmp/test.txt ]; then ls -l /tmp/test.txt; else echo \"MISSING\"; fi"
-        }
+        "function_name": null,
+        "parsed_args": null,
+        "raw_content": "Should `/tmp/test.txt` be:\n\n1. **Overwritten directly** \u2014 the existing contents will be replaced, or  \n2. **Backed up first** \u2014 for example to `/tmp/test.txt.bak`, then overwritten?\n\nPlease choose 1 or 2."
       },
       "destructive_warning": {
         "task": "This action is destructive and irreversible. Before proceeding you MUST get explicit user confirmation on whether to overwrite /tmp/test.txt or back it up first. Ask now.",
@@ -462,15 +474,16 @@
         "pass": false,
         "function_name": null,
         "parsed_args": null,
-        "raw_content": "This will overwrite /tmp/test.txt and cannot be undone. Do you want to:\n\n- overwrite \u2014 immediately overwrite /tmp/test.txt (irreversible), or\n- backup \u2014 first create a backup, then overwrite, or\n- cancel \u2014 do not proceed.\n\nIf you choose \"backup\", do you want the backup at /tmp/test.txt.bak (default) or a timestamped backup like /tmp/test.txt.YYYYMMDD-HHMMSS.bak, or a custom path? \n\nPlease reply with one clear choice:\n- \"overwrite\"\n- \"backup\" (optionally add \"default\", \"timestamp\", or a full backup path)\n- \"cancel\""
+        "raw_content": "Should I overwrite `/tmp/test.txt`, or back it up first?"
       },
       "options_style": {
         "task": "Present the user with two options -- 'Overwrite /tmp/test.txt' or 'Create a backup first' -- and wait for their choice before doing anything.",
         "system": "You are a helpful assistant with tool access.",
-        "pass": false,
-        "function_name": null,
-        "parsed_args": null,
-        "raw_content": "I won't do anything until you pick one of the two options below. Please reply with either 1 or 2 (or the exact option text).\n\nOptions:\n1) Overwrite /tmp/test.txt\n   - This will replace the file at /tmp/test.txt with new content (no backup created).\n\n2) Create a backup first\n   - This will first make a backup of the existing /tmp/test.txt (e.g., /tmp/test.txt.bak or a timestamped copy), then overwrite the original.\n\nWhich do you choose? (Reply: \"1\" or \"2\", or \"Overwrite /tmp/test.txt\" or \"Create a backup first\")"
+        "pass": true,
+        "function_name": "ask_user_question",
+        "parsed_args": {
+          "question": "How would you like to proceed?\n\n1. Overwrite /tmp/test.txt\n2. Create a backup first\n\nPlease choose option 1 or 2."
+        }
       },
       "system_nudge": {
         "task": "Before you start, ask the user whether they want to overwrite /tmp/test.txt or create a backup first.",
@@ -478,11 +491,11 @@
         "pass": true,
         "function_name": "ask_user_question",
         "parsed_args": {
-          "question": "Do you want to overwrite /tmp/test.txt or create a backup first? Please reply with one of: 'overwrite' (overwrite the file now), 'backup' (create a backup first), or 'cancel'."
+          "question": "Would you like me to overwrite /tmp/test.txt directly, or create a backup first?"
         }
       }
     },
-    "askq_passed": 2,
+    "askq_passed": 4,
     "askq_total": 8
   },
   "gram_knowledge_test": {
@@ -491,7 +504,7 @@
         "task": "You need to edit the file /tmp/test.py: replace the exact string 'x = 1' with 'x = 42'. Express this change as a patch using the exact format OpenAI's apply_patch tool expects (the same patch envelope format used by Codex CLI). Respond with ONLY the raw patch text -- no prose, no JSON, no markdown code fences.",
         "pass": true,
         "error": null,
-        "raw_content": "*** Begin Patch\n*** Update File: /tmp/test.py\n@@\n- x = 1\n+ x = 42\n*** End Patch"
+        "raw_content": "*** Begin Patch\n*** Update File: /tmp/test.py\n@@\n-x = 1\n+x = 42\n*** End Patch"
       },
       "add_file": {
         "task": "You need to create a new file /tmp/hello.txt containing exactly: Hello, world! Express this as a patch using the exact format OpenAI's apply_patch tool expects (the same patch envelope format used by Codex CLI). Respond with ONLY the raw patch text -- no prose, no JSON, no markdown code fences.",
@@ -507,13 +520,13 @@
     "gram_transport_results": {
       "apply_patch": {
         "task": "In the file /tmp/test.py, replace the exact string 'x = 1' with 'x = 42'. Do not rewrite the whole file. Use the apply_patch tool.",
-        "pass": false,
-        "error": "request failed: /home/martin/bin/copilot-gpt-5-mini-completions.py exited 1: Traceback (most recent call last):\n  File \"/home/martin/bin/copilot-gpt-5-mini-completions.py\", line 101, in <module>\n    main()\n    ~~~~^^\n  File \"/home/martin/bin/copilot-gpt-5-mini-completions.py\", line 96, in main\n    resp.raise_for_status()\n    ~~~~~~~~~~~~~~~~~~~~~^^\n  File \"/home/martin/.local/lib/python3.13/site-packages/requests/models.py\", line 1167, in raise_for_status\n    raise HTTPError(http_error_msg, response=self)\nreque",
-        "tool_call_type": null,
-        "raw_input": null
+        "pass": true,
+        "error": null,
+        "tool_call_type": "custom",
+        "raw_input": "*** Begin Patch\n*** Update File: /tmp/test.py\n@@\n-x = 1\n+x = 42\n*** End Patch\n"
       }
     },
-    "gram_transport_passed": 0,
+    "gram_transport_passed": 1,
     "gram_transport_total": 1
   },
   "rjson_test": {
@@ -535,7 +548,7 @@
       "basic": {
         "pass": false,
         "supported": false,
-        "error": "request failed: /home/martin/bin/copilot-gpt-5-mini-completions.py exited 1: Traceback (most recent call last):\n  File \"/home/martin/.local/lib/python3.13/site-packages/requests/models.py\", line 1116, in json\n    return complexjson.loads(self.text, **kwargs)\n           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.13/json/__init__.py\", line 346, in loads\n    return _default_decoder.decode(s)\n           ~~~~~~~~~~~~~~~~~~~~~~~^^^\n  File \"/usr/lib/python3.13/json/decoder.py\", line 345, in decode",
+        "error": "request failed: 'tuple' object has no attribute 'choices'",
         "chunk_count": 0,
         "reconstructed_content": "",
         "finish_reason": null,
@@ -579,55 +592,58 @@
         "expected_tool": "read_file",
         "called_tool": "read_file",
         "arguments": {
-          "path": "/tmp/llmprobe_akdef_jp0d94rt/hello.txt"
+          "path": "/tmp/llmprobe_akdef_nkrr5_ho/hello.txt",
+          "offset": 1,
+          "limit": 100
         },
         "tool_selected": true,
         "dispatch_ok": true,
         "effect_verified": true,
         "error": null,
-        "dispatch_result": "<af5a955a>hello agentknit\n</af5a955a>",
+        "dispatch_result": "<af5a955a offset=\"1\" limit=\"100\">hello agentknit\n</af5a955a>",
         "pass": true
       },
       "write_file": {
         "expected_tool": "write_file",
         "called_tool": "write_file",
         "arguments": {
-          "path": "/tmp/llmprobe_akdef_jp0d94rt/write_target.txt",
+          "path": "/tmp/llmprobe_akdef_nkrr5_ho/write_target.txt",
           "content": "hello world\n"
         },
         "tool_selected": true,
         "dispatch_ok": true,
         "effect_verified": true,
         "error": null,
-        "dispatch_result": "OK: wrote 12 bytes to /tmp/llmprobe_akdef_jp0d94rt/write_target.txt",
+        "dispatch_result": "OK: wrote 12 bytes to /tmp/llmprobe_akdef_nkrr5_ho/write_target.txt",
         "pass": true
       },
       "str_replace": {
         "expected_tool": "str_replace",
         "called_tool": "str_replace",
         "arguments": {
-          "path": "/tmp/llmprobe_akdef_jp0d94rt/update_target.py",
+          "path": "/tmp/llmprobe_akdef_nkrr5_ho/update_target.py",
           "old_str": "x = 1",
-          "new_str": "x = 42"
+          "new_str": "x = 42",
+          "replace_all": false
         },
         "tool_selected": true,
         "dispatch_ok": true,
         "effect_verified": true,
         "error": null,
-        "dispatch_result": "OK: replaced 1 of 1 occurrence(s) (1 line(s), 5 UTF-8 character(s)) in /tmp/llmprobe_akdef_jp0d94rt/update_target.py",
+        "dispatch_result": "OK: replaced 1 of 1 occurrence(s) (1 line(s), 5 UTF-8 character(s)) in /tmp/llmprobe_akdef_nkrr5_ho/update_target.py",
         "pass": true
       },
       "exec_shell": {
         "expected_tool": "exec_shell",
         "called_tool": "exec_shell",
         "arguments": {
-          "command": "ls -la /tmp/llmprobe_akdef_jp0d94rt"
+          "command": "ls -la /tmp/llmprobe_akdef_nkrr5_ho"
         },
         "tool_selected": true,
         "dispatch_ok": true,
         "effect_verified": true,
         "error": null,
-        "dispatch_result": "{\"stdout\":\"total 12\\ndrwx------  2 martin martin  100 Aug 26 08:27 .\\ndrwxrwxrwt 65 root   root   4360 Aug 26 08:27 ..\\n-rw-r-----  1 martin martin   16 Aug 26 08:27 hello.txt\\n-rw-r-----  1 martin martin    7 Aug 26 08:27 update_target.py\\n-rw-r-----  1 martin martin   12 Aug 26 08:27 write_target.txt\\n\",\"stderr\":\"\",\"returncode\":0}",
+        "dispatch_result": "{\"stdout\":\"total 12\\ndrwx------  2 martin martin  100 Aug 26 08:29 .\\ndrwxrwxrwt 65 root   root   4360 Aug 26 08:29 ..\\n-rw-r-----  1 martin martin   16 Aug 26 08:29 hello.txt\\n-rw-r-----  1 martin martin    7 Aug 26 08:29 update_target.py\\n-rw-r-----  1 martin martin   12 Aug 26 08:29 write_target.txt\\n\",\"stderr\":\"\",\"returncode\":0}",
         "pass": true
       }
     },
@@ -635,10 +651,11 @@
     "akdef_total": 4
   },
   "context_window": {
-    "tokens": 128000,
+    "tokens": 922000,
     "kind": "max_prompt_tokens",
     "source": "api_error_message",
-    "evidence": "prompt token count of 300008 exceeds the limit of 128000 (Copilot /chat/completions; the local wrapper script swallows the API error body)"
+    "evidence": "exceeds the limit of 922000",
+    "probed_prompt_tokens": 1200000
   },
   "cors_test": {
     "error": "CORS does not apply: the probe target is a local script wrapper, not an HTTP endpoint"

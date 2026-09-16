@@ -2,6 +2,7 @@
   "model": "deepseek/deepseek-v4.1-flash",
   "llmprobe_commit": "a2e0d34e647eab46910de7ae4376cb05f08ebf3a",
   "endpoint": "https://openrouter.ai/api/v1",
+  "server": "openrouter.ai",
   "api_type": "OpenAI Completions",
   "status": "ok",
   "error": null,

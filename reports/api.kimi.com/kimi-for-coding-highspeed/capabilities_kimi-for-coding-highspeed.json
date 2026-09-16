@@ -1,6 +1,7 @@
 {
   "model": "kimi-for-coding-highspeed",
   "endpoint": "https://api.kimi.com/coding/v1",
+  "server": "api.kimi.com",
   "api_type": "OpenAI Completions",
   "status": "ok",
   "error": null,

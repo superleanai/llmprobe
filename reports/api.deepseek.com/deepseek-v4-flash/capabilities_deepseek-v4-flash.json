@@ -1,6 +1,7 @@
 {
   "model": "deepseek-v4-flash",
   "endpoint": "https://api.deepseek.com",
+  "server": "api.deepseek.com",
   "api_type": "OpenAI Completions",
   "status": "ok",
   "error": null,

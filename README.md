@@ -5,9 +5,8 @@ capabilities by actually calling it, instead of trusting vendor docs.
 
 Results are written as JSON + Markdown per model under
 `reports/<server>/<model>/`, where `<server>` is the endpoint's host
-(`api.kimi.com`, `openrouter.ai`, ...) or `script_<name>` for a local
-wrapper script, so the same model served by different providers stays
-separate and comparable side by side.
+(`api.kimi.com`, `openrouter.ai`, ...), so the same model served by
+different providers stays separate and comparable side by side.
 
 ## Capabilities
 
@@ -62,6 +61,13 @@ internally, non-OpenAI transport) can be probed in place of an HTTP
 endpoint with `--script path/to/script.py`; the script must read one
 Chat-Completions JSON payload from stdin and print one JSON response to
 stdout.
+
+A wrapper hides which server actually answers — a Copilot wrapper, for
+instance, is handed its base URL at auth time — so it may add an
+`x_upstream_endpoint` field (the upstream base URL) to any response it
+prints. llmprobe strips that field before parsing the response and files
+the run under that host. Without it the run lands in
+`reports/unknown-server/`; `--server NAME` overrides both.
 
 `AKDEF` needs `agentknit` importable (a sibling checkout on `sys.path`,
 editable-installed); if it isn't, the test reports an error and every

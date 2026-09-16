@@ -59,6 +59,8 @@ API_TYPE_LABELS = {
 
 _PROBE_DIR: Path | None = None
 _KEY_NAME: str | None = None
+# Upstream URL last reported by a `script:` wrapper (see _script_upstream).
+_SCRIPT_UPSTREAM: str | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -201,6 +203,11 @@ def parse_args() -> argparse.Namespace:
                         "chat/completions JSON payload from stdin and print one JSON "
                         "response to stdout (e.g. ~/bin/*-completions.py). --model is "
                         "still used to label/log this run; --endpoint/--key-name are ignored.")
+    p.add_argument("--server", default=None,
+                   help="Name of the server answering this run, used as the "
+                        "reports/<server>/<model>/ directory (default: the "
+                        "endpoint's host, or, for --script, the upstream the "
+                        "wrapper reports in 'x_upstream_endpoint').")
     p.add_argument("--render-md", action="store_true", dest="render_md_only",
                    help="Skip probing entirely; just (re)render the Markdown report "
                         "from the existing capabilities_<model>.json (or --output) on disk.")
@@ -262,6 +269,7 @@ class _ScriptChatCompletions:
         self.script_path = script_path
 
     def create(self, **kwargs) -> "openai.types.chat.ChatCompletion":
+        global _SCRIPT_UPSTREAM
         timeout = kwargs.pop("timeout", 300)
         proc = subprocess.run(
             [sys.executable, self.script_path],
@@ -272,6 +280,12 @@ class _ScriptChatCompletions:
             raise RuntimeError(f"{self.script_path} exited {proc.returncode}: "
                                f"{proc.stderr.strip()[:1000]}")
         data = json.loads(proc.stdout)
+        # A wrapper hides which server actually answered, so it may name it in
+        # "x_upstream_endpoint" (see _script_upstream). Strip it before
+        # validation: it is bookkeeping for the report, not part of the reply.
+        upstream = data.pop("x_upstream_endpoint", None)
+        if isinstance(upstream, str) and upstream.strip():
+            _SCRIPT_UPSTREAM = upstream.strip()
         # Some scripts return a near-OpenAI-compatible payload missing the
         # bookkeeping fields (e.g. Copilot's API omits "object"/"created").
         # Backfill rather than fail validation over fields nothing here reads.
@@ -291,27 +305,65 @@ class ScriptClient:
 
 
 def _safe_server(endpoint: str) -> str:
-    """Filesystem-safe slug identifying the server an endpoint points at.
+    """Filesystem-safe slug for the server named by `endpoint`.
 
-    HTTP(S) endpoints collapse to their host (`https://api.kimi.com/coding/v1`
-    -> `api.kimi.com`), so every model served by the same provider shares one
-    directory. Local `script:` targets use the script's stem.
+    Endpoints collapse to their host (`https://api.kimi.com/coding/v1` ->
+    `api.kimi.com`), so every model served by the same provider shares one
+    directory. A `script:` target is a local wrapper, not a server: its real
+    upstream comes from _script_upstream() and is passed here instead.
     """
-    endpoint = endpoint or ""
-    if endpoint.startswith("script:"):
-        stem = Path(endpoint[len("script:"):]).name
-        if stem.endswith(".py"):
-            stem = stem[:-3]
-        slug = f"script_{stem}" if stem else "script"
-    else:
-        host = urllib.parse.urlsplit(endpoint).netloc or endpoint
-        slug = host or "unknown-server"
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", slug).strip("_") or "unknown-server"
+    endpoint = (endpoint or "").strip()
+    if not endpoint or endpoint.startswith("script:"):
+        return "unknown-server"
+    host = urllib.parse.urlsplit(endpoint).netloc or endpoint
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", host).strip("_") or "unknown-server"
 
 
-def _report_dir(endpoint: str, safe_model: str) -> Path:
+def _script_upstream(script_path: str) -> str | None:
+    """Ask a wrapper script which server it actually talks to.
+
+    A wrapper reaches the real inference server on our behalf, so only it knows
+    the upstream URL — which for e.g. Copilot is handed out at auth time and
+    cannot be read off the script. The script may report it in an
+    "x_upstream_endpoint" field on any response; this sends the smallest
+    possible request to obtain one. Returns None if the script does not
+    cooperate, in which case the run is filed under "unknown-server".
+    """
+    global _SCRIPT_UPSTREAM
+    _SCRIPT_UPSTREAM = None
+    try:
+        # No max_tokens: some upstreams 400 on it, and a rejected request
+        # never gets far enough to name the server.
+        _ScriptChatCompletions(script_path).create(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            timeout=120,
+        )
+    except Exception:
+        pass  # a wrapper that cannot answer this cannot name its server either
+    return _SCRIPT_UPSTREAM
+
+
+def _known_server_for(endpoint: str, safe_model: str) -> str | None:
+    """Server slug of an existing report for this model probed via `endpoint`.
+
+    Lets a re-run of a script target land in the directory the previous run
+    resolved, without paying for another upstream-discovery call.
+    """
+    for path in sorted(Path("reports").glob(f"*/{safe_model}/capabilities_{safe_model}.json")):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if data.get("endpoint") == endpoint:
+            return path.parent.parent.name
+    return None
+
+
+def _report_dir(endpoint: str, safe_model: str, server: str | None = None) -> Path:
     """reports/<server>/<model>/ — one directory per model per server."""
-    return Path("reports") / _safe_server(endpoint) / safe_model
+    return Path("reports") / (server or _safe_server(endpoint)) / safe_model
 
 
 def _init_probe_dir(safe_model: str) -> None:
@@ -2988,6 +3040,11 @@ def render_markdown_report(output: dict) -> str:
         lines.append("Generated by [llmprobe](https://github.com/superleanai/llmprobe).")
     lines.append("")
     lines.append(f"- **Endpoint:** {endpoint}")
+    server = output.get("server")
+    if server and server != _safe_server(endpoint):
+        # Worth printing only when the endpoint does not already name it, i.e.
+        # when a wrapper script fronts the real server.
+        lines.append(f"- **Server:** {server}")
     lines.append(f"- **API type:** {output.get('api_type', 'OpenAI Completions')}")
     lines.append(f"- **Context window:** {_md_context_window(output)}")
     if _capability_absent(output, "cors_test"):
@@ -3873,7 +3930,16 @@ def main():
     _KEY_NAME = args.key_name
 
     safe_model = MODEL.replace("/", "_").replace(":", "_")
-    report_dir = _report_dir(ENDPOINT, safe_model)
+    server = _safe_server(args.server) if args.server else _known_server_for(ENDPOINT, safe_model)
+    if server is None and ENDPOINT.startswith("script:"):
+        upstream = _script_upstream(ENDPOINT[len("script:"):])
+        if upstream:
+            server = _safe_server(upstream)
+        else:
+            print(f"Warning: {ENDPOINT} did not report an 'x_upstream_endpoint'; "
+                  f"filing this run under reports/unknown-server/. Pass --server "
+                  f"to name it explicitly.")
+    report_dir = _report_dir(ENDPOINT, safe_model, server)
     report_dir.mkdir(parents=True, exist_ok=True)
     out_path   = args.output or str(report_dir / f"capabilities_{safe_model}.json")
 
@@ -3965,6 +4031,7 @@ def main():
         "model":                MODEL,
         "llmprobe_commit":      _llmprobe_commit(),
         "endpoint":             ENDPOINT,
+        "server":               report_dir.parent.name,
         "api_type":             API_TYPE_LABELS[args.api_type],
         "status":               "incomplete",
         "error":                None,

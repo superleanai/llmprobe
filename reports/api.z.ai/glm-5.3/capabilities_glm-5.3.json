@@ -1,6 +1,7 @@
 {
   "model": "glm-5.3",
   "endpoint": "https://api.z.ai/api/coding/paas/v4",
+  "server": "api.z.ai",
   "api_type": "OpenAI Completions",
   "status": "ok",
   "error": null,

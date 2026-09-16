@@ -2,6 +2,7 @@
   "model": "deepseek-flash",
   "llmprobe_commit": "52cad4b9734b6ffcd0fa316da3e6adf13f62b3ab",
   "endpoint": "https://api.deepseek.com/v1",
+  "server": "api.deepseek.com",
   "api_type": "OpenAI Completions",
   "status": "ok",
   "error": null,
