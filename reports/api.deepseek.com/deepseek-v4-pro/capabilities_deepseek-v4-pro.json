@@ -738,5 +738,45 @@
     "preflight_passed": true,
     "actual_response_passed": true,
     "evidence": "OPTIONS https://api.deepseek.com/v1/chat/completions -> access-control-allow-origin: https://llmprobe.example; GET /models -> access-control-allow-origin: https://llmprobe.example"
+  },
+  "tdef_test": {
+    "surfaces": {
+      "openai-completions": {
+        "surface": "openai-completions",
+        "url": "https://api.deepseek.com/v1/chat/completions",
+        "model": "deepseek-v4-pro",
+        "deferred_request_status": 400,
+        "verdict": "rejected",
+        "rejected_component": "tool_search",
+        "evidence": "HTTP 400: Failed to deserialize the JSON body into the target type: tools[4].type: unknown variant `tool_search`, expected `function` at line 1 column 22163 invalid_request_error None invalid_request_error"
+      },
+      "openai-responses": {
+        "surface": "openai-responses",
+        "url": "https://api.deepseek.com/v1/responses",
+        "model": "deepseek-v4-pro",
+        "deferred_request_status": 200,
+        "input_tokens": {
+          "bare": 90,
+          "inline": 4956,
+          "deferred": 4956
+        },
+        "token_accounting": "tool schemas cost 4866 input tokens inline; deferring them changed the prompt by 0",
+        "reachability": "direct_call",
+        "called_tools": [
+          "warehouse_inventory_lookup"
+        ],
+        "verdict": "accepted-but-ignored"
+      },
+      "anthropic-messages": {
+        "surface": "anthropic-messages",
+        "url": "https://api.deepseek.com/anthropic/v1/messages",
+        "model": "deepseek-v4-pro",
+        "deferred_request_status": 400,
+        "verdict": "rejected",
+        "rejected_component": "tool_search",
+        "evidence": "HTTP 400: Failed to deserialize the JSON body into the target type: tools[4]: unknown variant `tool_search_tool_bm25_20251119`, expected `web_search_20250305` or `web_search_20260209` at line 1 column 22089 invalid_request_error None invalid_request_error"
+      }
+    },
+    "verdict": "accepted-but-ignored"
   }
 }

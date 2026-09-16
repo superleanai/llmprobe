@@ -519,5 +519,35 @@
     "preflight_passed": false,
     "actual_response_passed": true,
     "evidence": "OPTIONS https://api.z.ai/api/coding/paas/v4/chat/completions -> access-control-allow-origin: (none); GET /models -> access-control-allow-origin: https://llmprobe.example"
+  },
+  "tdef_test": {
+    "surfaces": {
+      "openai-completions": {
+        "surface": "openai-completions",
+        "url": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+        "model": "glm-5.3",
+        "deferred_request_status": 400,
+        "verdict": "rejected",
+        "rejected_component": "tool_search",
+        "evidence": "HTTP 400: 1214 tools[4].type:type is illegal"
+      },
+      "openai-responses": {
+        "surface": "openai-responses",
+        "url": "https://api.z.ai/api/v1/responses",
+        "model": "glm-5.3",
+        "deferred_request_status": 429,
+        "verdict": "error",
+        "evidence": "HTTP 429: rate_limit_exceeded Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-09-21 00:27:25 None rate_limit_exceeded"
+      },
+      "anthropic-messages": {
+        "surface": "anthropic-messages",
+        "url": "https://api.z.ai/api/anthropic/v1/messages",
+        "model": "glm-5.3",
+        "deferred_request_status": 429,
+        "verdict": "error",
+        "evidence": "HTTP 429: rate_limit_error 1310 [1310][Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-09-21 00:27:25][20260916133221582d8f5b8065466b]"
+      }
+    },
+    "verdict": "rejected"
   }
 }

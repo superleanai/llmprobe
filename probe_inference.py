@@ -189,6 +189,32 @@ def parse_args() -> argparse.Namespace:
                         "capabilities_<model>.json, add/refresh its cors_test section, "
                         "re-render the markdown, and exit. Implies --cors-test. "
                         "Requires a previous full probe run.")
+    p.add_argument("--tdef-test", action=argparse.BooleanOptionalAction,
+                   dest="tdef_test", default=True,
+                   help="Run an extra round that checks whether the endpoint honours "
+                        "deferred tool loading (`defer_loading` plus a tool-search tool) "
+                        "on each protocol surface it serves -- chat completions, OpenAI "
+                        "Responses and Anthropic Messages. Because compatibility layers "
+                        "silently drop unknown fields, the verdict comes from comparing "
+                        "reported input tokens with the schemas inline vs. deferred, not "
+                        "from the HTTP status. On by default; pass --no-tdef-test to "
+                        "skip. Use --tdef-only to run just this round against an "
+                        "existing report.")
+    p.add_argument("--tdef-only", action="store_true", dest="tdef_only",
+                   help="Run only the TDEF round: load the existing "
+                        "capabilities_<model>.json, add/refresh its tdef_test section, "
+                        "re-render the markdown, and exit. Implies --tdef-test. "
+                        "Requires a previous full probe run.")
+    p.add_argument("--tdef-responses-base", default=None, dest="tdef_responses_base",
+                   help="Base URL of the endpoint's OpenAI Responses surface for TDEF "
+                        "(default: --endpoint, i.e. <endpoint>/responses).")
+    p.add_argument("--tdef-anthropic-base", default=None, dest="tdef_anthropic_base",
+                   help="Base URL of the endpoint's Anthropic Messages surface for TDEF "
+                        "(default: guessed as <host>/.../anthropic, which is where every "
+                        "vendor probed so far puts it).")
+    p.add_argument("--tdef-anthropic-model", default=None, dest="tdef_anthropic_model",
+                   help="Model ID to send to the Anthropic Messages surface, for vendors "
+                        "that map claude-* names onto their own models (default: --model).")
     p.add_argument("--api-type", default="openai-completions",
                    choices=["openai-completions", "openai-responses", "anthropic-messages"],
                    help="The *actual* backend transport behind the endpoint/script, for "
@@ -393,7 +419,7 @@ _RESULT_KEYS = (
     "quote_test", "token_efficiency_test", "askq_test",
     "gram_knowledge_test", "gram_transport_test", "rjson_test",
     "stream_test", "reasoning_test", "agentknit_test", "cache_ttl_test",
-    "context_window", "cors_test",
+    "context_window", "cors_test", "tdef_test",
 )
 
 
@@ -2963,6 +2989,504 @@ def _cors_merge(cors_test: dict) -> dict:
     return merged
 
 
+# -- deferred tool loading test (TDEF) -----------------------------------------
+#
+# "Deferred tool loading" keeps a tool's parameter schema out of the prompt
+# until the model asks for it through a tool-search tool. Two incompatible
+# implementations exist upstream, and an OpenAI/Anthropic-compatible endpoint
+# could plausibly carry either:
+#
+#   - OpenAI, Responses API only: a {"type": "tool_search"} entry in `tools`,
+#     with deferrable function tools marked "defer_loading": true.
+#   - Anthropic, Messages API: a server tool
+#     {"type": "tool_search_tool_bm25_20251119", ...}, same "defer_loading"
+#     marker, with results coming back as tool_search_tool_result blocks.
+#
+# The hazard this probe exists for: compatibility layers built in front of a
+# non-OpenAI model routinely *drop unknown request fields silently* (DeepSeek
+# documents exactly that). So an HTTP 200 on a request carrying defer_loading
+# proves nothing at all, and neither does the absence of an error message.
+# Three rounds per surface, cheapest first:
+#
+#   1. Rejection  -- send the deferred tool set. A 4xx naming the field is a
+#      clean negative and ends it; 404/405 on the path means the surface is
+#      simply absent (n/a). HTTP 200 proves nothing, so continue.
+#   2. Token accounting -- the real test. Send the same request three ways:
+#      with no tools (baseline), with all tool schemas inline (control), and
+#      with most of them deferred. If deferral is honoured, the reported input
+#      tokens must fall by most of what the schemas cost; if the counts match
+#      the control, the field was swallowed and the schemas went in anyway.
+#   3. Reachability -- ask for something only a deferred tool can do. Native
+#      support shows a tool-search step before the real call; a direct call to
+#      a deferred tool with valid arguments proves the schema was in the prompt
+#      all along, corroborating round 2 without trusting usage accounting.
+#
+# One pitfall is encoded in the tool set itself: never mark every tool
+# deferred. Anthropic answers `400 All tools have defer_loading set`, and a
+# probe that trips that reads as "rejected" for entirely the wrong reason.
+
+_TDEF_ANTHROPIC_VERSION = "2023-06-01"
+_TDEF_SEARCH_TOOL_ANTHROPIC = {"type": "tool_search_tool_bm25_20251119",
+                               "name": "tool_search_tool_bm25"}
+_TDEF_SEARCH_TOOL_OPENAI = {"type": "tool_search"}
+_TDEF_MAX_TOKENS = 64
+# The reachability round needs headroom: a reasoning model spends its first
+# hundreds of tokens thinking, and a tool call truncated away reads as "no
+# call at all", which would silently turn the round into a non-observation.
+_TDEF_REACH_MAX_TOKENS = 1024
+_TDEF_BASE_PROMPT = "Reply with the single word OK."
+_TDEF_REACH_PROMPT = ("You must call a tool, not answer from memory. How many "
+                      "units of SKU AB-1234 are on hand in warehouse HAM-3 "
+                      "right now?")
+
+# Each deferred tool carries a few hundred tokens of parameter schema, so the
+# difference between "deferred" and "inline" is far outside usage-counter noise.
+_TDEF_TOOL_SPECS = (
+    ("warehouse_inventory_lookup",
+     "Look up live on-hand stock for one SKU in one warehouse, including "
+     "reserved, damaged and in-transit quantities.", True),
+    ("freight_quote_calculator",
+     "Quote freight for a shipment between two facilities across every "
+     "contracted carrier, lane and service level.", True),
+    ("customs_tariff_classifier",
+     "Classify a product under the harmonised tariff schedule and return duty "
+     "rates, restrictions and required documents per destination.", True),
+    ("report_status",
+     "Report a short free-text status line back to the operator. Always "
+     "available.", False),
+)
+
+
+def _tdef_parameters(name: str) -> dict:
+    """A deliberately large JSON-Schema parameter object for one probe tool."""
+    properties: dict = {}
+    for i in range(12):
+        properties[f"{name}_field_{i}"] = {
+            "type": "string",
+            "description": (
+                f"Field {i} of the {name} request envelope. Supply the fully "
+                f"qualified identifier as issued by the upstream system of "
+                f"record, including its region prefix, its four-digit revision "
+                f"suffix and any correlation token the caller was handed by a "
+                f"previous call. The value is matched verbatim and is case "
+                f"sensitive."),
+        }
+    properties[f"{name}_options"] = {
+        "type": "object",
+        "description": (
+            "Optional execution settings controlling pagination, currency "
+            "conversion, unit normalisation and whether historical revisions "
+            "are included in the answer."),
+        "properties": {
+            "page_size": {"type": "integer", "description": "Rows per page, 1 to 500."},
+            "currency": {"type": "string", "description": "ISO 4217 currency for monetary fields."},
+            "include_history": {"type": "boolean", "description": "Include superseded revisions."},
+        },
+    }
+    return {"type": "object", "properties": properties,
+            "required": [f"{name}_field_0"]}
+
+
+def _tdef_tools() -> list[dict]:
+    """The canonical probe tool set: most deferrable, at least one never is."""
+    return [{"name": name, "description": description,
+             "parameters": _tdef_parameters(name), "deferrable": deferrable}
+            for name, description, deferrable in _TDEF_TOOL_SPECS]
+
+
+def _tdef_anthropic_base(endpoint: str) -> str:
+    """Guess the Anthropic-Messages base URL that sits beside an OpenAI one.
+
+    Every vendor probed so far hangs its Anthropic-compatible surface off
+    `/anthropic` under the same host, one level above the OpenAI version
+    segment: `https://api.deepseek.com` -> `.../anthropic`,
+    `https://api.moonshot.ai/v1` -> `.../anthropic`,
+    `https://api.z.ai/api/paas/v4` -> `https://api.z.ai/api/anthropic`.
+    Override with --tdef-anthropic-base when a vendor disagrees.
+    """
+    parts = urllib.parse.urlsplit(endpoint)
+    segments = [s for s in parts.path.split("/") if s]
+    while segments:
+        last = segments[-1]
+        if re.fullmatch(r"v\d+(?:\.\d+)?", last) or last in {"paas", "coding"}:
+            segments.pop()
+            continue
+        break
+    segments.append("anthropic")
+    return urllib.parse.urlunsplit(
+        (parts.scheme, parts.netloc, "/" + "/".join(segments), "", ""))
+
+
+def _tdef_post(url: str, payload: dict, headers: dict) -> tuple[int | None, object]:
+    """One JSON POST that never raises; status is None on a transport error.
+
+    The body is returned parsed when it is JSON and as text otherwise, because
+    the error body is the evidence: whether a 400 names `defer_loading` is
+    exactly what separates "rejected" from "the model disliked the prompt".
+    """
+    req = urllib.request.Request(
+        url, method="POST", data=json.dumps(payload).encode(),
+        headers=dict(headers, **{"Content-Type": "application/json"}))
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = resp.read().decode("utf-8", "replace")
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+        status = e.code
+    except Exception as e:
+        return None, f"transport error: {e}"
+    try:
+        return status, json.loads(body)
+    except json.JSONDecodeError:
+        return status, body[:2000]
+
+
+def _tdef_surface_payload(surface: str, model: str, tools: list[dict],
+                          prompt: str, mode: str,
+                          max_tokens: int = _TDEF_MAX_TOKENS) -> dict:
+    """Build one request for `surface` in mode bare / inline / deferred."""
+    if mode == "bare":
+        entries: list[dict] = []
+    elif surface == "anthropic-messages":
+        entries = [dict({"name": t["name"], "description": t["description"],
+                         "input_schema": t["parameters"]},
+                        **({"defer_loading": True}
+                           if mode == "deferred" and t["deferrable"] else {}))
+                   for t in tools]
+        if mode == "deferred":
+            entries.append(dict(_TDEF_SEARCH_TOOL_ANTHROPIC))
+    elif surface == "openai-responses":
+        entries = [dict({"type": "function", "name": t["name"],
+                         "description": t["description"],
+                         "parameters": t["parameters"]},
+                        **({"defer_loading": True}
+                           if mode == "deferred" and t["deferrable"] else {}))
+                   for t in tools]
+        if mode == "deferred":
+            entries.append(dict(_TDEF_SEARCH_TOOL_OPENAI))
+    else:
+        entries = [dict({"type": "function",
+                         "function": {"name": t["name"],
+                                      "description": t["description"],
+                                      "parameters": t["parameters"]}},
+                        **({"defer_loading": True}
+                           if mode == "deferred" and t["deferrable"] else {}))
+                   for t in tools]
+        if mode == "deferred":
+            entries.append(dict(_TDEF_SEARCH_TOOL_OPENAI))
+
+    if surface == "openai-responses":
+        payload: dict = {"model": model, "input": prompt,
+                         "max_output_tokens": max_tokens, "stream": False}
+    else:
+        payload = {"model": model, "max_tokens": max_tokens,
+                   "messages": [{"role": "user", "content": prompt}]}
+    if entries:
+        payload["tools"] = entries
+    return payload
+
+
+def _tdef_input_tokens(body: object) -> int | None:
+    """Input/prompt tokens from any of the three response shapes."""
+    if not isinstance(body, dict):
+        return None
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    for key in ("prompt_tokens", "input_tokens"):
+        value = usage.get(key)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _tdef_error_text(body: object) -> str:
+    """Flatten an error body to a single searchable string."""
+    if isinstance(body, str):
+        return body
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            return " ".join(str(v) for v in error.values())
+        if isinstance(error, str):
+            return error
+        for key in ("message", "detail", "msg"):
+            if isinstance(body.get(key), str):
+                return body[key]
+        return json.dumps(body)[:2000]
+    return ""
+
+
+def _tdef_surface_absent(status: int | None, text: str) -> bool:
+    """True when the failure says the surface itself is not there.
+
+    A 404/405 on the path, or a body naming an unknown path/method, means the
+    vendor never implemented this protocol here -- which is `n/a`, not a
+    verdict about deferred loading.
+    """
+    if status in (404, 405, 501):
+        return True
+    lowered = text.lower()
+    return any(marker in lowered for marker in
+               ("not found", "no such endpoint", "unknown path",
+                "method not allowed", "cannot post"))
+
+
+def _tdef_rejected_component(text: str, search_index: int | None = None,
+                             deferred_indices: tuple[int, ...] = ()) -> str | None:
+    """Which half of the feature an error body rejects, if it identifies one.
+
+    The two halves fail separately: an endpoint can whitelist tool types (and
+    so reject the search tool) while still swallowing `defer_loading` on the
+    function tools, or the other way round. Either one alone makes the feature
+    unusable, but the report should say which.
+
+    Some endpoints name neither and merely point at the offending array slot
+    ("tools[4].type:type is illegal"), so the indices the probe used are the
+    only way to read that answer -- hence `search_index` / `deferred_indices`.
+    """
+    lowered = text.lower()
+    field = "defer_loading" in lowered or "defer loading" in lowered
+    search = any(marker in lowered for marker in
+                 ("tool_search", "tool search", "tool_search_tool"))
+    if not search and search_index is not None:
+        search = bool(re.search(rf"tools[\[.]{search_index}\b", lowered))
+    if not field:
+        field = any(re.search(rf"tools[\[.]{i}\b", lowered) for i in deferred_indices)
+    if field and search:
+        return "both"
+    if field:
+        return "defer_loading"
+    if search:
+        return "tool_search"
+    return None
+
+
+def _tdef_search_used(body: object) -> bool:
+    """True when the response shows the model going through a tool search.
+
+    Every shape spells the step differently -- Anthropic's
+    `tool_search_tool_result` content block, a Responses output item, a
+    chat-completions tool call -- and vendors namespace their own variants
+    (OpenRouter emits `"type": "openrouter:tool_search"`). So rather than
+    matching a fixed list, walk the response and accept any `type`/`name`
+    that mentions a tool search at all.
+    """
+    def walk(node: object) -> bool:
+        if isinstance(node, dict):
+            for key in ("type", "name"):
+                value = node.get(key)
+                if isinstance(value, str) and "tool_search" in value.lower():
+                    return True
+            return any(walk(v) for v in node.values())
+        if isinstance(node, list):
+            return any(walk(v) for v in node)
+        return False
+
+    if not isinstance(body, dict):
+        return False
+    # Only what the model produced counts: several endpoints echo the request's
+    # `tools` array back in the response, search tool included.
+    return any(walk(body.get(channel))
+               for channel in ("output", "content", "choices"))
+
+
+def _tdef_called_tools(body: object) -> list[str]:
+    """Names of the non-search tools the model called, across all shapes."""
+    names: list[str] = []
+    if not isinstance(body, dict):
+        return names
+    for choice in body.get("choices") or []:
+        message = (choice or {}).get("message") or {}
+        for call in message.get("tool_calls") or []:
+            name = ((call or {}).get("function") or {}).get("name")
+            if name:
+                names.append(name)
+    for item in body.get("output") or []:
+        if isinstance(item, dict) and item.get("type") == "function_call":
+            if item.get("name"):
+                names.append(item["name"])
+    content = body.get("content")
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                if block.get("name"):
+                    names.append(block["name"])
+    search_names = {"tool_search_tool_bm25", "tool_search_tool_regex", "tool_search"}
+    return [n for n in names if n not in search_names]
+
+
+def _tdef_classify_tokens(bare: int | None, inline: int | None,
+                          deferred: int | None) -> tuple[str | None, str]:
+    """Decide from input-token counts whether the schemas left the prompt."""
+    if inline is None or deferred is None:
+        return None, ("the endpoint reported no input-token usage, so the "
+                      "prompt size could not be compared")
+    drop = inline - deferred
+    schema_cost = (inline - bare) if bare is not None else None
+    if schema_cost is not None and schema_cost > 0:
+        threshold = max(0.5 * schema_cost, 100)
+        detail = (f"tool schemas cost {schema_cost} input tokens inline; "
+                  f"deferring them changed the prompt by {drop}")
+    else:
+        threshold = 300
+        detail = (f"deferring the schemas changed the prompt by {drop} input "
+                  f"tokens (no tool-free baseline available)")
+    return ("native" if drop >= threshold else "accepted-but-ignored"), detail
+
+
+def _tdef_probe_surface(surface: str, url: str, model: str,
+                        headers: dict) -> dict:
+    """Run the three TDEF rounds against one protocol surface."""
+    tools = _tdef_tools()
+    result: dict = {"surface": surface, "url": url, "model": model}
+
+    status, body = _tdef_post(
+        url, _tdef_surface_payload(surface, model, tools, _TDEF_BASE_PROMPT,
+                                   "deferred"), headers)
+    text = _tdef_error_text(body)
+    result["deferred_request_status"] = status
+    if status is None:
+        result["verdict"] = "n/a"
+        result["evidence"] = text
+        return result
+    if status >= 400:
+        rejected = _tdef_rejected_component(
+            text, search_index=len(tools),
+            deferred_indices=tuple(i for i, t in enumerate(tools) if t["deferrable"]))
+        if _tdef_surface_absent(status, text):
+            result["verdict"] = "n/a"
+            result["evidence"] = f"HTTP {status}: this protocol surface is not served here"
+        elif rejected:
+            result["verdict"] = "rejected"
+            result["rejected_component"] = rejected
+            result["evidence"] = f"HTTP {status}: {text[:400]}"
+        else:
+            result["verdict"] = "error"
+            result["evidence"] = f"HTTP {status}: {text[:400]}"
+        return result
+
+    deferred_tokens = _tdef_input_tokens(body)
+    _, inline_body = _tdef_post(
+        url, _tdef_surface_payload(surface, model, tools, _TDEF_BASE_PROMPT,
+                                   "inline"), headers)
+    _, bare_body = _tdef_post(
+        url, _tdef_surface_payload(surface, model, tools, _TDEF_BASE_PROMPT,
+                                   "bare"), headers)
+    inline_tokens = _tdef_input_tokens(inline_body)
+    bare_tokens = _tdef_input_tokens(bare_body)
+    result["input_tokens"] = {"bare": bare_tokens, "inline": inline_tokens,
+                              "deferred": deferred_tokens}
+    verdict, detail = _tdef_classify_tokens(bare_tokens, inline_tokens,
+                                            deferred_tokens)
+    result["token_accounting"] = detail
+
+    _, reach_body = _tdef_post(
+        url, _tdef_surface_payload(surface, model, tools, _TDEF_REACH_PROMPT,
+                                   "deferred", _TDEF_REACH_MAX_TOKENS), headers)
+    searched = _tdef_search_used(reach_body)
+    called = _tdef_called_tools(reach_body)
+    deferred_names = {t["name"] for t in tools if t["deferrable"]}
+    called_deferred = [n for n in called if n in deferred_names]
+    result["reachability"] = (
+        "search_then_call" if searched
+        else "direct_call" if called_deferred
+        else "no_call")
+    result["called_tools"] = called
+
+    if verdict is None:
+        # No usable token counts: a genuine search round-trip is the only
+        # remaining positive evidence, and a direct call to a deferred tool
+        # is proof the schema was in the prompt.
+        verdict = "native" if searched else "accepted-but-ignored"
+        result["token_accounting"] = detail + "; verdict taken from the reachability round instead"
+    elif searched and verdict != "native":
+        # A real search round-trip outranks the counters, which a
+        # compatibility layer may synthesise rather than measure.
+        verdict = "native"
+        result["token_accounting"] = detail + "; overridden by an observed tool-search round-trip"
+    result["verdict"] = verdict
+    return result
+
+
+_TDEF_VERDICT_RANK = {"native": 3, "accepted-but-ignored": 2, "rejected": 1,
+                      "error": 0, "n/a": 0}
+
+
+def _tdef_overall(surfaces: dict) -> str:
+    """Best verdict across surfaces -- one honouring surface is enough."""
+    verdicts = [s.get("verdict", "n/a") for s in surfaces.values()]
+    if not verdicts:
+        return "n/a"
+    return max(verdicts, key=lambda v: _TDEF_VERDICT_RANK.get(v, 0))
+
+
+def _tdef_cell(tdef: dict) -> str:
+    """The `TDEF` capabilities-table cell: overall verdict plus per surface."""
+    surfaces = tdef.get("surfaces") or {}
+    if not surfaces:
+        return "no surface reachable"
+    per = ", ".join(f"{name}: {data.get('verdict', 'n/a')}"
+                    for name, data in surfaces.items())
+    return f"**{tdef.get('verdict', 'n/a')}** ({per})"
+
+
+def _tdef_summary_line(tdef: dict) -> str:
+    """One-line verdict for the console and the report."""
+    verdict = tdef.get("verdict")
+    if verdict == "native":
+        return ("at least one surface genuinely defers tool schemas -- they leave "
+                "the prompt and come back through a tool search")
+    if verdict == "accepted-but-ignored":
+        return ("no surface defers anything: `defer_loading` is either rejected or "
+                "accepted and silently dropped, leaving the schemas in the prompt "
+                "and on the bill")
+    if verdict == "rejected":
+        return ("every reachable surface rejects deferred tool loading outright, "
+                "which is at least honest")
+    return "no surface exposed a deferred-loading answer"
+
+
+def tdef_test_round(api_key: str, args: argparse.Namespace) -> dict:
+    """Probe every protocol surface for genuine deferred tool loading."""
+    section("TDEF test -- deferred tool loading")
+    print("\nSends the same request with tool schemas inline and deferred, and")
+    print("compares the reported input tokens: a compatibility layer that drops")
+    print("`defer_loading` still answers 200 with the schemas in the prompt.\n")
+
+    if not ENDPOINT.startswith(("http://", "https://")):
+        print("[tdef] skipped: a local --script wrapper is not an HTTP endpoint")
+        return {"error": "TDEF does not apply: the probe target is a local script "
+                         "wrapper, not an HTTP endpoint"}
+
+    bearer = {"Authorization": f"Bearer {api_key}"} if api_key.strip() else {}
+    anthropic_headers = dict(bearer, **{"x-api-key": api_key,
+                                        "anthropic-version": _TDEF_ANTHROPIC_VERSION})
+    responses_base = (args.tdef_responses_base or ENDPOINT).rstrip("/")
+    anthropic_base = (args.tdef_anthropic_base
+                      or _tdef_anthropic_base(ENDPOINT)).rstrip("/")
+    targets = (
+        ("openai-completions", f"{ENDPOINT.rstrip('/')}/chat/completions", MODEL, bearer),
+        ("openai-responses", f"{responses_base}/responses", MODEL, bearer),
+        ("anthropic-messages", f"{anthropic_base}/v1/messages",
+         args.tdef_anthropic_model or MODEL, anthropic_headers),
+    )
+
+    surfaces: dict = {}
+    for surface, url, model, headers in targets:
+        print(f"[tdef] {surface}: POST {url}")
+        surfaces[surface] = _tdef_probe_surface(surface, url, model, headers)
+        data = surfaces[surface]
+        detail = data.get("token_accounting") or data.get("evidence") or ""
+        print(f"[tdef] {surface}: {data['verdict']}"
+              + (f" -- {detail[:160]}" if detail else ""))
+
+    result = {"surfaces": surfaces, "verdict": _tdef_overall(surfaces)}
+    print("\nTDEF summary: " + _tdef_summary_line(result))
+    return result
+
+
 # -- markdown report -----------------------------------------------------------
 
 def _md_escape(text: str) -> str:
@@ -3180,6 +3704,15 @@ def render_markdown_report(output: dict) -> str:
         lines.append(f"| `CORS` | *(error: {_md_escape(cors_test['error'])})* |")
     else:
         lines.append("| `CORS` | *(not run — rerun without `--no-cors-test`)* |")
+    tdef_test = output.get("tdef_test")
+    if _capability_absent(output, "tdef_test"):
+        lines.append(f"| `TDEF` | *({_NO_DATA_NOTE})* |")
+    elif tdef_test and "error" not in tdef_test:
+        lines.append(f"| `TDEF` | {_md_escape(_tdef_cell(tdef_test))} |")
+    elif tdef_test and tdef_test.get("error"):
+        lines.append(f"| `TDEF` | *({_md_escape(tdef_test['error'])})* |")
+    else:
+        lines.append("| `TDEF` | *(not run — rerun without `--no-tdef-test`)* |")
     lines.append("")
 
     ctx = output.get("context_window")
@@ -3263,6 +3796,51 @@ def render_markdown_report(output: dict) -> str:
         lines.append("## CORS preflight test (`CORS`)")
         lines.append("")
         lines.append(f"Error: {cors_test['error']}")
+        lines.append("")
+
+    if _capability_absent(output, "tdef_test"):
+        _append_no_data_section(lines, "## Deferred tool loading (`TDEF`)")
+    elif tdef_test and "error" not in tdef_test:
+        lines.append("## Deferred tool loading (`TDEF`)")
+        lines.append("")
+        lines.append(f"**{tdef_test.get('verdict', 'n/a')}** — "
+                     + _tdef_summary_line(tdef_test) + ".")
+        lines.append("")
+        lines.append("A tool marked `defer_loading` is supposed to keep its parameter")
+        lines.append("schema out of the prompt until the model asks for it through a")
+        lines.append("tool-search tool. Compatibility layers routinely accept the field")
+        lines.append("and drop it, so HTTP 200 proves nothing: the verdict below comes")
+        lines.append("from sending the same request with the schemas inline and deferred")
+        lines.append("and comparing the endpoint's own input-token count, then asking for")
+        lines.append("something only a deferred tool can answer.")
+        lines.append("")
+        lines.append("| Surface | Verdict | Input tokens (none / inline / deferred) | Reachability | Evidence |")
+        lines.append("|---|---|---|---|---|")
+        for name, data in (tdef_test.get("surfaces") or {}).items():
+            tokens = data.get("input_tokens") or {}
+            counts = " / ".join(
+                str(tokens.get(k)) if tokens.get(k) is not None else "—"
+                for k in ("bare", "inline", "deferred")) if tokens else "—"
+            evidence = data.get("token_accounting") or data.get("evidence") or ""
+            # Provider error bodies arrive multiply JSON-escaped and can run to
+            # hundreds of unreadable characters; the JSON report keeps them whole.
+            if len(evidence) > 200:
+                evidence = evidence[:197] + "..."
+            if data.get("rejected_component"):
+                evidence = f"rejects `{data['rejected_component']}` — {evidence}"
+            lines.append(f"| `{name}` | {data.get('verdict', 'n/a')} | {counts} | "
+                         f"{data.get('reachability') or '—'} | "
+                         f"{_md_escape(evidence) or '—'} |")
+        lines.append("")
+        lines.append("`native` means the schemas genuinely left the prompt; "
+                     "`accepted-but-ignored` means the field was swallowed and the "
+                     "schemas were billed anyway; `rejected` means the endpoint said so; "
+                     "`n/a` means the surface is not served here.")
+        lines.append("")
+    elif tdef_test and tdef_test.get("error"):
+        lines.append("## Deferred tool loading (`TDEF`)")
+        lines.append("")
+        lines.append(f"Error: {tdef_test['error']}")
         lines.append("")
 
     lines.append("## Format detection & call delivery (`TCALL`)")
@@ -4001,6 +4579,24 @@ def main():
         print(f"\nReport written to {out_path} and {md_path}")
         return
 
+    if args.tdef_only:
+        if not Path(out_path).exists():
+            sys.exit(f"Cannot run --tdef-only: {out_path} does not exist. "
+                     "Run the full probe first.")
+        with open(out_path) as f:
+            output = json.load(f)
+        print(f"Target: {ENDPOINT}")
+        print(f"Model:  {MODEL}")
+        api_key = "" if args.script else get_api_key(args.key_name)
+        output["tdef_test"] = tdef_test_round(api_key, args)
+        md_path = _capabilities_md_path(out_path)
+        with open(out_path, "w") as f:
+            json.dump(output, f, indent=2)
+        with open(md_path, "w") as f:
+            f.write(render_markdown_report(output))
+        print(f"\nReport written to {out_path} and {md_path}")
+        return
+
     if args.cache_ttl_only:
         if not Path(out_path).exists():
             sys.exit(f"Cannot run --cache-ttl-only: {out_path} does not exist. "
@@ -4054,6 +4650,7 @@ def main():
         "cache_ttl_test":       None,
         "context_window":       None,
         "cors_test":            None,
+        "tdef_test":            None,
     }
 
     md_path = _capabilities_md_path(out_path)
@@ -4069,6 +4666,7 @@ def main():
         print(msg)
 
     if args.script:
+        api_key = ""
         client = ScriptClient(args.script)
     else:
         api_key = get_api_key(args.key_name)
@@ -4292,6 +4890,17 @@ def main():
             else:
                 output["cors_test"] = {"error": str(e)}
                 print(f"\nERROR in CORS test round: {e}")
+
+    if args.tdef_test:
+        try:
+            output["tdef_test"] = tdef_test_round(api_key, args)
+        except Exception as e:
+            if _keep_previous_result(e, previous, "tdef_test"):
+                output["tdef_test"] = previous["tdef_test"]
+                print(f"\nERROR in TDEF test round (429): {e} -- keeping previous run's result")
+            else:
+                output["tdef_test"] = {"error": str(e)}
+                print(f"\nERROR in TDEF test round: {e}")
 
     save()
 

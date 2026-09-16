@@ -26,6 +26,7 @@ See `CAPABILITIES.md` for what each codename measures, its unit, and its range.
 | `CACH` | *(no data, please rerun the probing)* |
 | `TSEL` | 6/8 |
 | `CORS` | no access-control-allow-origin |
+| `TDEF` | **rejected** (openai-completions: rejected, openai-responses: rejected, anthropic-messages: n/a) |
 
 ## Context window
 
@@ -61,6 +62,26 @@ sent for any of this.
 |---|---|---|---|---|---|
 | preflight (OPTIONS /chat/completions) | 404 | — | — | — | FAIL |
 | actual response (GET /models) | 401 | — | — | — | FAIL |
+
+## Deferred tool loading (`TDEF`)
+
+**rejected** — every reachable surface rejects deferred tool loading outright, which is at least honest.
+
+A tool marked `defer_loading` is supposed to keep its parameter
+schema out of the prompt until the model asks for it through a
+tool-search tool. Compatibility layers routinely accept the field
+and drop it, so HTTP 200 proves nothing: the verdict below comes
+from sending the same request with the schemas inline and deferred
+and comparing the endpoint's own input-token count, then asking for
+something only a deferred tool can answer.
+
+| Surface | Verdict | Input tokens (none / inline / deferred) | Reachability | Evidence |
+|---|---|---|---|---|
+| `openai-completions` | rejected | — | — | rejects `tool_search` — HTTP 400: unknown tool type: tool_search, currently only function and plugin are supported invalid_request_error |
+| `openai-responses` | rejected | — | — | rejects `defer_loading` — HTTP 400: invalid_request_error invalid_request_error: invalid_request_error: tools.0.defer_loading is not supported invalid_request_error |
+| `anthropic-messages` | n/a | — | — | HTTP 404: this protocol surface is not served here |
+
+`native` means the schemas genuinely left the prompt; `accepted-but-ignored` means the field was swallowed and the schemas were billed anyway; `rejected` means the endpoint said so; `n/a` means the surface is not served here.
 
 ## Format detection & call delivery (`TCALL`)
 

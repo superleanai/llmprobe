@@ -26,6 +26,7 @@ See `CAPABILITIES.md` for what each codename measures, its unit, and its range.
 | `CACH` | TTL > 10.0 min |
 | `TSEL` | 7/8 |
 | `CORS` | reflected origin `https://llmprobe.example` |
+| `TDEF` | **accepted-but-ignored** (openai-completions: rejected, openai-responses: accepted-but-ignored, anthropic-messages: rejected) |
 
 ## Context window
 
@@ -61,6 +62,26 @@ sent for any of this.
 |---|---|---|---|---|---|
 | preflight (OPTIONS /chat/completions) | 200 | `https://llmprobe.example` | `POST` | `authorization, content-type` | PASS |
 | actual response (GET /models) | 401 | `https://llmprobe.example` | — | — | PASS |
+
+## Deferred tool loading (`TDEF`)
+
+**accepted-but-ignored** — no surface defers anything: `defer_loading` is either rejected or accepted and silently dropped, leaving the schemas in the prompt and on the bill.
+
+A tool marked `defer_loading` is supposed to keep its parameter
+schema out of the prompt until the model asks for it through a
+tool-search tool. Compatibility layers routinely accept the field
+and drop it, so HTTP 200 proves nothing: the verdict below comes
+from sending the same request with the schemas inline and deferred
+and comparing the endpoint's own input-token count, then asking for
+something only a deferred tool can answer.
+
+| Surface | Verdict | Input tokens (none / inline / deferred) | Reachability | Evidence |
+|---|---|---|---|---|
+| `openai-completions` | rejected | — | — | rejects `tool_search` — HTTP 400: Failed to deserialize the JSON body into the target type: tools[4].type: unknown variant `tool_search`, expected `function` at line 1 column 22162 invalid_request_error None invalid_reque... |
+| `openai-responses` | accepted-but-ignored | 37 / 4893 / 4893 | direct_call | tool schemas cost 4856 input tokens inline; deferring them changed the prompt by 0 |
+| `anthropic-messages` | rejected | — | — | rejects `tool_search` — HTTP 400: Failed to deserialize the JSON body into the target type: tools[4]: unknown variant `tool_search_tool_bm25_20251119`, expected `web_search_20250305` or `web_search_20260209` at line 1 col... |
+
+`native` means the schemas genuinely left the prompt; `accepted-but-ignored` means the field was swallowed and the schemas were billed anyway; `rejected` means the endpoint said so; `n/a` means the surface is not served here.
 
 ## Format detection & call delivery (`TCALL`)
 

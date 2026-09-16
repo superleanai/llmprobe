@@ -26,6 +26,7 @@ See `CAPABILITIES.md` for what each codename measures, its unit, and its range.
 | `CACH` | *(no data, please rerun the probing)* |
 | `TSEL` | *(no data, please rerun the probing)* |
 | `CORS` | preflight or response blocks browser-direct access |
+| `TDEF` | **rejected** (openai-completions: rejected, openai-responses: error, anthropic-messages: error) |
 
 ## Context window
 
@@ -61,6 +62,26 @@ sent for any of this.
 |---|---|---|---|---|---|
 | preflight (OPTIONS /chat/completions) | 200 | — | — | — | FAIL |
 | actual response (GET /models) | 401 | `https://llmprobe.example` | — | — | PASS |
+
+## Deferred tool loading (`TDEF`)
+
+**rejected** — every reachable surface rejects deferred tool loading outright, which is at least honest.
+
+A tool marked `defer_loading` is supposed to keep its parameter
+schema out of the prompt until the model asks for it through a
+tool-search tool. Compatibility layers routinely accept the field
+and drop it, so HTTP 200 proves nothing: the verdict below comes
+from sending the same request with the schemas inline and deferred
+and comparing the endpoint's own input-token count, then asking for
+something only a deferred tool can answer.
+
+| Surface | Verdict | Input tokens (none / inline / deferred) | Reachability | Evidence |
+|---|---|---|---|---|
+| `openai-completions` | rejected | — | — | rejects `tool_search` — HTTP 400: 1214 tools[4].type:type is illegal |
+| `openai-responses` | error | — | — | HTTP 429: rate_limit_exceeded Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-09-21 00:27:25 None rate_limit_exceeded |
+| `anthropic-messages` | error | — | — | HTTP 429: rate_limit_error 1310 [1310][Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-09-21 00:27:25][20260916133221582d8f5b8065466b] |
+
+`native` means the schemas genuinely left the prompt; `accepted-but-ignored` means the field was swallowed and the schemas were billed anyway; `rejected` means the endpoint said so; `n/a` means the surface is not served here.
 
 ## Format detection & call delivery (`TCALL`)
 

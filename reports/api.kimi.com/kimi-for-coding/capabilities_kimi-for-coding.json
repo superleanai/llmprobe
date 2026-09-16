@@ -694,5 +694,36 @@
     "preflight_passed": false,
     "actual_response_passed": false,
     "evidence": "OPTIONS https://api.kimi.com/coding/v1/chat/completions -> access-control-allow-origin: None; GET /models -> access-control-allow-origin: None"
+  },
+  "tdef_test": {
+    "surfaces": {
+      "openai-completions": {
+        "surface": "openai-completions",
+        "url": "https://api.kimi.com/coding/v1/chat/completions",
+        "model": "kimi-for-coding",
+        "deferred_request_status": 400,
+        "verdict": "rejected",
+        "rejected_component": "tool_search",
+        "evidence": "HTTP 400: unknown tool type: tool_search, currently only function and plugin are supported invalid_request_error"
+      },
+      "openai-responses": {
+        "surface": "openai-responses",
+        "url": "https://api.kimi.com/coding/v1/responses",
+        "model": "kimi-for-coding",
+        "deferred_request_status": 400,
+        "verdict": "rejected",
+        "rejected_component": "defer_loading",
+        "evidence": "HTTP 400: invalid_request_error invalid_request_error: invalid_request_error: tools.0.defer_loading is not supported invalid_request_error"
+      },
+      "anthropic-messages": {
+        "surface": "anthropic-messages",
+        "url": "https://api.kimi.com/anthropic/v1/messages",
+        "model": "kimi-for-coding",
+        "deferred_request_status": 404,
+        "verdict": "n/a",
+        "evidence": "HTTP 404: this protocol surface is not served here"
+      }
+    },
+    "verdict": "rejected"
   }
 }

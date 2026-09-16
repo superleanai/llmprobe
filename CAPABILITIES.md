@@ -343,3 +343,58 @@ to cover both `authorization` and `content-type`; a preflight missing those
 fails in the browser exactly like a missing origin does. A successful actual
 response alone does not make an endpoint browser-direct: both legs must pass.
 The two requests carry no Authorization, so this round needs no credentials.
+
+## `TDEF`
+
+**Capability:** Endpoint honours *deferred tool loading* — a tool marked
+`defer_loading` genuinely stays out of the prompt the caller is billed for
+and is reachable only after a tool-search round-trip. Reported as
+`tdef_test` in the JSON plus a `TDEF` row in the capabilities table and a
+`## Deferred tool loading` section in the Markdown report.
+
+- **Unit:** one verdict per protocol surface (chat completions, OpenAI
+  Responses, Anthropic Messages), plus the best verdict across them
+- **Range:** `native` (schemas left the prompt) / `accepted-but-ignored`
+  (the field was swallowed and the schemas were billed anyway) / `rejected`
+  (the endpoint said so) / `n/a` (that surface is not served here)
+- **Source:** `tdef_test` (enabled by default; disable with `--no-tdef-test`;
+  refresh an existing report with `--tdef-only`)
+
+Two incompatible upstream implementations exist, and a compatible endpoint
+could carry either: OpenAI's `{"type": "tool_search"}` entry (Responses API
+only) or Anthropic's `tool_search_tool_bm25_20251119` server tool, both
+paired with `"defer_loading": true` on the tools to defer. The probe sends
+whichever shape the surface speaks.
+
+The reason this needs three rounds rather than one is that **HTTP 200 proves
+nothing**. DeepSeek documents outright that unsupported parameters are
+silently ignored rather than rejected, and silently dropping unknown fields
+is the cheap way to build any compatibility layer — so a request carrying
+`defer_loading` that comes back 200 may well have put every schema in the
+prompt. The rounds are:
+
+1. **Rejection.** Send the deferred tool set. A 4xx naming `defer_loading`
+   or `tool_search` is a clean negative; 404/405 means the surface is not
+   served here at all (`n/a`); 200 settles nothing and the probe continues.
+2. **Token accounting** — the verdict. The same request goes out three
+   ways: no tools (baseline), all schemas inline (control), most of them
+   deferred. Each probe tool carries a few hundred tokens of parameter
+   schema, so genuine deferral must show up as a large fall in the
+   endpoint's own reported input tokens. A drop of at least half the
+   measured schema cost is `native`; counts that match the control mean the
+   field was swallowed.
+3. **Reachability.** With the tools deferred, ask for something only a
+   deferred tool can answer. A tool-search round-trip corroborates `native`
+   without trusting usage accounting; a direct, well-formed call to a
+   deferred tool proves the schema was in the prompt all along.
+
+The probe never marks *every* tool deferred: Anthropic answers `400 All
+tools have defer_loading set`, and a probe that trips that would read as
+`rejected` for entirely the wrong reason. One tool in the set is therefore
+permanently non-deferrable.
+
+The Responses and Anthropic surfaces usually live at sibling URLs rather
+than under `--endpoint` (`https://api.deepseek.com/anthropic`,
+`https://api.z.ai/api/anthropic`). The probe guesses them from the endpoint
+host; `--tdef-responses-base`, `--tdef-anthropic-base` and
+`--tdef-anthropic-model` override the guess for vendors that disagree.

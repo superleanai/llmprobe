@@ -26,6 +26,7 @@ See `CAPABILITIES.md` for what each codename measures, its unit, and its range.
 | `CACH` | TTL between 5.0 and 10.0 min |
 | `TSEL` | 7/8 |
 | `CORS` | `*` (any origin) |
+| `TDEF` | **native** (openai-completions: rejected, openai-responses: native, anthropic-messages: n/a) |
 
 ## Context window
 
@@ -61,6 +62,26 @@ sent for any of this.
 |---|---|---|---|---|---|
 | preflight (OPTIONS /chat/completions) | 204 | `*` | `GET,OPTIONS,PATCH,DELETE,POST,PUT` | `Authorization,User-Agent,X-Api-Key,X-CSRF-Token,X-Requested-With,Accept,Accep...` | PASS |
 | actual response (GET /models) | 200 | `*` | — | — | PASS |
+
+## Deferred tool loading (`TDEF`)
+
+**native** — at least one surface genuinely defers tool schemas -- they leave the prompt and come back through a tool search.
+
+A tool marked `defer_loading` is supposed to keep its parameter
+schema out of the prompt until the model asks for it through a
+tool-search tool. Compatibility layers routinely accept the field
+and drop it, so HTTP 200 proves nothing: the verdict below comes
+from sending the same request with the schemas inline and deferred
+and comparing the endpoint's own input-token count, then asking for
+something only a deferred tool can answer.
+
+| Surface | Verdict | Input tokens (none / inline / deferred) | Reachability | Evidence |
+|---|---|---|---|---|
+| `openai-completions` | rejected | — | — | rejects `tool_search` — HTTP 400: Provider returned error 400 {'raw': '{"error":{"message":"{\\"detail\\": \\"sglang rejected the request: {\\\\\\"object\\\\\\":\\\\\\"error\\\\\\",\\\\\\"message\\\\\\":\\\\\\"1 validatio... |
+| `openai-responses` | native | 37 / 4893 / 1567 | search_then_call | tool schemas cost 4856 input tokens inline; deferring them changed the prompt by 3326 |
+| `anthropic-messages` | n/a | — | — | HTTP 404: this protocol surface is not served here |
+
+`native` means the schemas genuinely left the prompt; `accepted-but-ignored` means the field was swallowed and the schemas were billed anyway; `rejected` means the endpoint said so; `n/a` means the surface is not served here.
 
 ## Format detection & call delivery (`TCALL`)
 

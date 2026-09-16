@@ -27,6 +27,7 @@ See `CAPABILITIES.md` for what each codename measures, its unit, and its range.
 | `CACH` | *(no data, please rerun the probing)* |
 | `TSEL` | 5/8 |
 | `CORS` | *(error: CORS does not apply: the probe target is a local script wrapper, not an HTTP endpoint)* |
+| `TDEF` | *(TDEF does not apply: the probe target is a local script wrapper, not an HTTP endpoint)* |
 
 ## Context window
 
@@ -42,6 +43,10 @@ See `CAPABILITIES.md` for what each codename measures, its unit, and its range.
 ## CORS preflight test (`CORS`)
 
 Error: CORS does not apply: the probe target is a local script wrapper, not an HTTP endpoint
+
+## Deferred tool loading (`TDEF`)
+
+Error: TDEF does not apply: the probe target is a local script wrapper, not an HTTP endpoint
 
 ## Format detection & call delivery (`TCALL`)
 

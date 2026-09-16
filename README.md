@@ -24,6 +24,7 @@ different providers stays separate and comparable side by side.
 | `TSEL` | Model calls the right tool in a list |
 | `AKDEF` | Model uses agentknit's real default tools (`read_file`/`write_file`/`str_replace`/`exec_shell`) correctly end to end |
 | `CORS` | Endpoint clears both browser CORS legs for cross-origin POSTs (wildcard, reflected origin, blocked, or none) |
+| `TDEF` | Endpoint honours deferred tool loading (`defer_loading` + tool search) per protocol surface, or silently ignores it |
 | Context window | Model's context-window size, recovered from `/models` metadata or the endpoint's own rejection message |
 
 Full definitions, units, and ranges: [CAPABILITIES.md](CAPABILITIES.md).

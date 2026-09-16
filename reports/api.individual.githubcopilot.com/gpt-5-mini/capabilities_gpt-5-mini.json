@@ -643,5 +643,8 @@
   },
   "cors_test": {
     "error": "CORS does not apply: the probe target is a local script wrapper, not an HTTP endpoint"
+  },
+  "tdef_test": {
+    "error": "TDEF does not apply: the probe target is a local script wrapper, not an HTTP endpoint"
   }
 }
