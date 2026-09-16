@@ -3,8 +3,11 @@
 Probe an LLM endpoint for tool-calling behaviour and API-surface
 capabilities by actually calling it, instead of trusting vendor docs.
 
-Results are written as JSON + Markdown per model under `reports/<model>/`,
-so different models and endpoints can be compared side by side.
+Results are written as JSON + Markdown per model under
+`reports/<server>/<model>/`, where `<server>` is the endpoint's host
+(`api.kimi.com`, `openrouter.ai`, ...) or `script_<name>` for a local
+wrapper script, so the same model served by different providers stays
+separate and comparable side by side.
 
 ## Capabilities
 
@@ -50,8 +53,8 @@ python3 probe_inference.py \
 This runs the full probe — tool-name/parameter elicitation plus every
 capability test below — and writes:
 
-- `reports/<model>/capabilities_<model>.json`
-- `reports/<model>/capabilities_<model>.md`
+- `reports/<server>/<model>/capabilities_<model>.json`
+- `reports/<server>/<model>/capabilities_<model>.md`
 
 Every extra capability test is on by default; pass its `--no-*` flag to
 skip one, e.g. `--no-stream-test`. Local wrapper scripts (auth handled
@@ -89,7 +92,7 @@ python3 probe_inference.py --quick-summary
 
 ## Reports
 
-Each `reports/<model>/capabilities_<model>.md` includes a capabilities
+Each `reports/<server>/<model>/capabilities_<model>.md` includes a capabilities
 summary table, the inferred tool schema, the tool-dispatch table, and a
 per-capability breakdown with pass/fail detail. `probes/<model>/` (not
 checked in) holds the raw request/response JSON for every probe call, for

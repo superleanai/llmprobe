@@ -38,6 +38,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from textwrap import indent
@@ -66,9 +67,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--model",    default=None, help="Model ID")
     p.add_argument("--key-name", default="OPENROUTER_API_KEY", dest="key_name",
                    help="Env-var name / keyring slot holding the API key (default: OPENROUTER_API_KEY).")
-    p.add_argument("--output",   default=None, help="Output JSON file (default: reports/<model>/capabilities_<model>.json)")
+    p.add_argument("--output",   default=None, help="Output JSON file (default: reports/<server>/<model>/capabilities_<model>.json)")
     p.add_argument("--quick-summary", action="store_true", dest="quick_summary",
-                   help="Read reports/*/capabilities_*.json files and list models with native "
+                   help="Read reports/<server>/<model>/capabilities_*.json files and list models with native "
                         "structured tool_call support along with their main tool parameters.")
     p.add_argument("--quote-test", action=argparse.BooleanOptionalAction, dest="quote_test",
                    default=True,
@@ -287,6 +288,30 @@ class _ScriptChat:
 class ScriptClient:
     def __init__(self, script_path: str):
         self.chat = _ScriptChat(script_path)
+
+
+def _safe_server(endpoint: str) -> str:
+    """Filesystem-safe slug identifying the server an endpoint points at.
+
+    HTTP(S) endpoints collapse to their host (`https://api.kimi.com/coding/v1`
+    -> `api.kimi.com`), so every model served by the same provider shares one
+    directory. Local `script:` targets use the script's stem.
+    """
+    endpoint = endpoint or ""
+    if endpoint.startswith("script:"):
+        stem = Path(endpoint[len("script:"):]).name
+        if stem.endswith(".py"):
+            stem = stem[:-3]
+        slug = f"script_{stem}" if stem else "script"
+    else:
+        host = urllib.parse.urlsplit(endpoint).netloc or endpoint
+        slug = host or "unknown-server"
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", slug).strip("_") or "unknown-server"
+
+
+def _report_dir(endpoint: str, safe_model: str) -> Path:
+    """reports/<server>/<model>/ — one directory per model per server."""
+    return Path("reports") / _safe_server(endpoint) / safe_model
 
 
 def _init_probe_dir(safe_model: str) -> None:
@@ -1215,9 +1240,10 @@ def _tool_param_signature(tool: dict) -> str:
 
 def quick_summary() -> None:
     import glob
-    paths = sorted(glob.glob("reports/*/capabilities_*.json"))
+    paths = sorted(set(glob.glob("reports/*/*/capabilities_*.json"))
+                   | set(glob.glob("reports/*/capabilities_*.json")))
     if not paths:
-        print("No schema json files found under reports/<model>/.")
+        print("No schema json files found under reports/<server>/<model>/.")
         return
 
     structured_list: list[dict] = []
@@ -3847,9 +3873,21 @@ def main():
     _KEY_NAME = args.key_name
 
     safe_model = MODEL.replace("/", "_").replace(":", "_")
-    report_dir = Path("reports") / safe_model
+    report_dir = _report_dir(ENDPOINT, safe_model)
     report_dir.mkdir(parents=True, exist_ok=True)
     out_path   = args.output or str(report_dir / f"capabilities_{safe_model}.json")
+
+    # Reports used to live in reports/<model>/; keep reading an existing one so
+    # a re-run against the same model still preserves earlier results.
+    legacy_path = Path("reports") / safe_model / f"capabilities_{safe_model}.json"
+    if args.output is None and not Path(out_path).exists() and legacy_path.exists():
+        for legacy in (legacy_path, legacy_path.with_suffix(".md")):
+            if legacy.exists():
+                legacy.replace(report_dir / legacy.name)
+        try:
+            legacy_path.parent.rmdir()
+        except OSError:
+            pass
 
     if args.render_md_only:
         if not Path(out_path).exists():
